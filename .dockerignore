@@ -1,0 +1,10 @@
+.git
+.agents
+.codex
+.DS_Store
+gha-creds-*.json
+__pycache__
+tests
+deploy
+scripts
+README.md

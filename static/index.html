@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Ask OpenAI, Claude, Ollama, and Azure or compatible Responses API models for independent answers, then let a chair synthesize them."
+    />
+    <title>Model Council</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Model Council home">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span>Model <em>Council</em></span>
+        </a>
+        <div class="local-badge">
+          <span class="pulse" aria-hidden="true"></span>
+          Local-first workspace
+        </div>
+      </header>
+
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">MULTI-MODEL DELIBERATION</p>
+          <h1 id="page-title">Ask several minds.<br /><span>Choose the clearest answer.</span></h1>
+          <p class="lede">
+            OpenAI, Claude, your local Ollama model, and an Azure or compatible endpoint can answer independently. Choose the evidence you trust, then appoint a chair to write the final synthesis.
+          </p>
+        </div>
+        <aside class="privacy-note" aria-label="Key handling notice">
+          <span class="privacy-icon" aria-hidden="true">⌁</span>
+          <div>
+            <strong>Keys stay ephemeral</strong>
+            <p>They are sent only to this local server for a request—never saved to disk, storage, cookies, or logs.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="workspace" aria-label="Council workspace">
+        <aside class="setup-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">01 / MEMBERS</p>
+              <h2>Set the table</h2>
+            </div>
+            <span class="member-count" id="member-count">3 seats</span>
+          </div>
+
+          <div class="provider-stack">
+            <article class="provider-card provider-openai" data-provider-card="openai">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph openai-glyph" aria-hidden="true">O</span>
+                  <div>
+                    <h3>OpenAI</h3>
+                    <p>Cloud council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable OpenAI">
+                  <input id="openai-enabled" type="checkbox" checked />
+                  <span></span>
+                </label>
+              </div>
+              <label class="field-label" for="openai-model">Model</label>
+              <input id="openai-model" class="field-input" value="gpt-5.6" maxlength="200" spellcheck="false" />
+              <label class="field-label" for="openai-key">API key</label>
+              <div class="secret-field">
+                <input
+                  id="openai-key"
+                  class="field-input"
+                  type="password"
+                  placeholder="sk-…"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                />
+                <button class="reveal-secret" type="button" data-reveal="openai-key" aria-label="Show OpenAI API key">Show</button>
+              </div>
+            </article>
+
+            <article class="provider-card provider-custom" data-provider-card="custom">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph custom-glyph" aria-hidden="true">⌘</span>
+                  <div>
+                    <h3>Azure &amp; custom</h3>
+                    <p>Responses API council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable Azure or custom provider">
+                  <input id="custom-enabled" type="checkbox" />
+                  <span></span>
+                </label>
+              </div>
+              <div class="two-field-row">
+                <div>
+                  <label class="field-label" for="custom-mode">Provider type</label>
+                  <select id="custom-mode" class="field-input">
+                    <option value="azure">Azure OpenAI</option>
+                    <option value="responses">Compatible Responses API</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label" for="custom-label">Display name</label>
+                  <input id="custom-label" class="field-input" value="Azure OpenAI" maxlength="80" spellcheck="false" />
+                </div>
+              </div>
+              <label class="field-label" for="custom-model">Deployment / model</label>
+              <input id="custom-model" class="field-input" placeholder="e.g. gpt-5.4" maxlength="200" spellcheck="false" />
+              <label class="field-label" for="custom-endpoint">Endpoint</label>
+              <input
+                id="custom-endpoint"
+                class="field-input field-input-small"
+                value="https://YOUR_RESOURCE_NAME.openai.azure.com/openai"
+                maxlength="600"
+                inputmode="url"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <div class="two-field-row">
+                <div>
+                  <label class="field-label" for="custom-auth-type">Authentication</label>
+                  <select id="custom-auth-type" class="field-input">
+                    <option value="api-key">Azure api-key</option>
+                    <option value="bearer">Bearer token</option>
+                    <option value="none">No authentication</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label" for="custom-api-version">Azure API version</label>
+                  <input id="custom-api-version" class="field-input" value="2025-04-01-preview" maxlength="120" spellcheck="false" />
+                </div>
+              </div>
+              <label class="field-label" for="custom-key">API key / token</label>
+              <div class="secret-field">
+                <input id="custom-key" class="field-input" type="password" placeholder="Kept only for this request" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                <button class="reveal-secret" type="button" data-reveal="custom-key" aria-label="Show custom API key">Show</button>
+              </div>
+              <details class="custom-json">
+                <summary>Advanced: paste custom JSON <span>▾</span></summary>
+                <p>Apply an endpoint configuration with optional <code>headers</code> and <code>query_params</code>. It replaces the fields above only in this tab.</p>
+                <textarea id="custom-json" class="guidance-textarea" rows="9" spellcheck="false" placeholder='{
+  "label": "Azure production",
+  "mode": "azure",
+  "model": "my-deployment",
+  "endpoint": "https://my-resource.openai.azure.com/openai",
+  "auth_type": "api-key",
+  "api_key": "",
+  "query_params": { "api-version": "2025-04-01-preview" },
+  "headers": {}
+}'></textarea>
+                <button id="apply-custom-json" class="quiet-button" type="button">Apply JSON configuration</button>
+              </details>
+              <p id="custom-status" class="connection-note">Azure uses the Responses API. For another provider, use its full <code>/responses</code> URL in compatible mode.</p>
+            </article>
+
+            <article class="provider-card provider-claude" data-provider-card="anthropic">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph claude-glyph" aria-hidden="true">C</span>
+                  <div>
+                    <h3>Claude</h3>
+                    <p>Anthropic council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable Claude">
+                  <input id="anthropic-enabled" type="checkbox" checked />
+                  <span></span>
+                </label>
+              </div>
+              <label class="field-label" for="anthropic-model">Model</label>
+              <input id="anthropic-model" class="field-input" value="claude-sonnet-4-5" maxlength="200" spellcheck="false" />
+              <label class="field-label" for="anthropic-key">API key</label>
+              <div class="secret-field">
+                <input
+                  id="anthropic-key"
+                  class="field-input"
+                  type="password"
+                  placeholder="sk-ant-…"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                />
+                <button class="reveal-secret" type="button" data-reveal="anthropic-key" aria-label="Show Claude API key">Show</button>
+              </div>
+            </article>
+
+            <article class="provider-card provider-ollama" data-provider-card="ollama">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph ollama-glyph" aria-hidden="true">◒</span>
+                  <div>
+                    <h3>Ollama</h3>
+                    <p>Local council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable Ollama">
+                  <input id="ollama-enabled" type="checkbox" checked />
+                  <span></span>
+                </label>
+              </div>
+              <div class="inline-label-row">
+                <label class="field-label" for="ollama-base-url">Local server</label>
+                <span class="local-only">loopback only</span>
+              </div>
+              <input
+                id="ollama-base-url"
+                class="field-input field-input-small"
+                value="http://127.0.0.1:11434"
+                maxlength="300"
+                inputmode="url"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <div class="inline-label-row model-row">
+                <label class="field-label" for="ollama-model">Local model</label>
+                <button id="refresh-ollama" class="quiet-button" type="button">Refresh</button>
+              </div>
+              <input
+                id="ollama-model"
+                class="field-input"
+                list="ollama-model-options"
+                value="gemma4"
+                placeholder="Choose or type a local model"
+                maxlength="200"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <datalist id="ollama-model-options"></datalist>
+              <p id="ollama-status" class="connection-note">Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.</p>
+            </article>
+          </div>
+
+          <button id="clear-session" class="clear-button" type="button">Clear keys &amp; results</button>
+        </aside>
+
+        <section class="deliberation-panel">
+          <div class="panel-heading prompt-heading">
+            <div>
+              <p class="eyebrow">02 / QUESTION</p>
+              <h2>Open deliberation</h2>
+            </div>
+            <div class="response-controls">
+              <label for="response-length">Response length</label>
+              <select id="response-length" aria-label="Response length">
+                <option value="700">Brief</option>
+                <option value="1200" selected>Balanced</option>
+                <option value="2200">Detailed</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="sr-only" for="question">Question for the council</label>
+          <textarea
+            id="question"
+            rows="7"
+            maxlength="14000"
+            placeholder="What should the council help you reason through?"
+          ></textarea>
+          <div class="composer-meta">
+            <div class="prompt-ideas" aria-label="Prompt ideas">
+              <button class="idea-chip" type="button" data-prompt="Compare the strongest arguments for and against this decision, then recommend a path.">Decision memo</button>
+              <button class="idea-chip" type="button" data-prompt="Identify the risks, assumptions, and blind spots in this plan.">Risk check</button>
+              <button class="idea-chip" type="button" data-prompt="Generate three approaches, compare their trade-offs, and suggest the best fit.">Explore options</button>
+            </div>
+            <span id="question-count">0 / 14,000</span>
+          </div>
+
+          <details class="guidance">
+            <summary>Optional council guidance <span>▾</span></summary>
+            <label class="sr-only" for="system-prompt">Optional council guidance</label>
+            <textarea
+              id="system-prompt"
+              class="guidance-textarea"
+              rows="3"
+              maxlength="4000"
+              placeholder="For example: focus on practical trade-offs, cite uncertainty, and write for an engineering leader."
+            ></textarea>
+          </details>
+
+          <div class="action-row">
+            <div class="creativity-control">
+              <label for="temperature">Creativity <output id="temperature-value" for="temperature">0.4</output></label>
+              <input id="temperature" type="range" min="0" max="1.2" step="0.1" value="0.4" />
+            </div>
+            <button id="ask-council" class="primary-button" type="button">
+              <span class="button-label">Convene council</span>
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+          <p class="local-disclosure">The browser talks only to this local app; the app makes the provider requests. Keep this tab open while the council deliberates.</p>
+
+          <section id="results-section" class="results-section" aria-live="polite" hidden>
+            <div class="results-heading">
+              <div>
+                <p class="eyebrow">03 / TESTIMONY</p>
+                <h2>Independent answers</h2>
+              </div>
+              <span id="round-time" class="round-time"></span>
+            </div>
+            <div id="member-results" class="member-results"></div>
+
+            <section id="synthesis-section" class="synthesis-section" hidden>
+              <div class="synthesis-heading">
+                <div>
+                  <p class="eyebrow">04 / CHAIR</p>
+                  <h2>Write the synthesis</h2>
+                  <p>Selected testimony is passed to the chair as reference material, not instructions.</p>
+                </div>
+                <div class="chair-controls">
+                  <label for="moderator">Chair</label>
+                  <select id="moderator" aria-label="Select the council chair"></select>
+                  <button id="synthesize" class="secondary-button" type="button">Synthesize</button>
+                </div>
+              </div>
+              <p id="selection-note" class="selection-note"></p>
+              <article id="final-answer" class="final-answer" hidden>
+                <div class="final-answer-head">
+                  <div>
+                    <span class="final-kicker">COUNCIL FINDING</span>
+                    <h3 id="final-title">Final synthesis</h3>
+                  </div>
+                  <button id="copy-final" class="copy-button" type="button">Copy</button>
+                </div>
+                <p id="final-meta" class="result-meta"></p>
+                <div id="final-text" class="answer-text"></div>
+              </article>
+            </section>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <template id="member-template">
+      <article class="member-result">
+        <div class="member-result-head">
+          <div class="member-name-row">
+            <span class="member-dot" aria-hidden="true"></span>
+            <div>
+              <h3 class="member-name"></h3>
+              <p class="member-model"></p>
+            </div>
+          </div>
+          <span class="result-status"></span>
+        </div>
+        <div class="member-result-body">
+          <p class="result-meta"></p>
+          <div class="answer-text"></div>
+          <p class="result-detail"></p>
+        </div>
+        <footer class="member-result-footer">
+          <label class="include-control">
+            <input class="include-member" type="checkbox" />
+            <span>Include in synthesis</span>
+          </label>
+          <button class="copy-button" type="button">Copy</button>
+        </footer>
+      </article>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
