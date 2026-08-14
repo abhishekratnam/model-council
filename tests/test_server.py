@@ -27,6 +27,11 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertFalse(server.is_safe_browser_origin("https://other.example.com"))
             self.assertFalse(server.is_safe_browser_origin("http://127.0.0.1:8787"))
 
+        with patch.dict(server.os.environ, {"MODEL_COUNCIL_ALLOWED_ORIGINS": "*"}, clear=True):
+            self.assertTrue(server.is_safe_browser_origin("https://council.example.com"))
+            self.assertTrue(server.is_safe_browser_origin("https://other.example.com"))
+            self.assertTrue(server.is_safe_browser_origin("http://localhost:8787"))
+
     def test_openai_request_uses_responses_api_and_disables_storage(self):
         fake_response = {
             "output": [

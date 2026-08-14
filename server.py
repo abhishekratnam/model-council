@@ -278,11 +278,14 @@ def configured_allowed_origins() -> set[str]:
 
     Leaving this unset preserves the local-only policy. A malformed configured
     value is ignored, which fails closed rather than widening browser access.
+    Use "*" to explicitly allow browser requests from any origin.
     """
 
     raw = os.environ.get("MODEL_COUNCIL_ALLOWED_ORIGINS", "").strip()
     if not raw:
         return set()
+    if raw == "*":
+        return {"*"}
     return {origin for item in raw.split(",") if (origin := normalized_origin(item))}
 
 
@@ -296,6 +299,8 @@ def is_safe_browser_origin(origin: str | None) -> bool:
     if not normalized:
         return False
     configured = configured_allowed_origins()
+    if "*" in configured:
+        return True
     if configured:
         return normalized in configured
     parsed = urllib.parse.urlsplit(normalized)

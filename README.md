@@ -67,6 +67,14 @@ gcloud run deploy model-council \
   --set-env-vars MODEL_COUNCIL_ALLOWED_ORIGINS=https://council.example.com
 ```
 
+The GitHub Actions workflow in `.github/workflows/deploy-cloud-run.yml`
+deploys the same service on pushes to `main` and from manual runs. Configure
+these repository settings under **Settings > Secrets and variables > Actions**:
+
+- Variables: `GCP_PROJECT_ID`, `MODEL_COUNCIL_ALLOWED_ORIGINS`, and optionally
+  `CLOUD_RUN_REGION` if you do not want the default `asia-south1`.
+- Secrets: `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`.
+
 Map `council.example.com` as a Cloud Run custom domain before using that
 command. If you use the generated `run.app` URL instead, set the environment
 variable to that exact HTTPS URL. Deploying the service again is enough to
@@ -135,7 +143,9 @@ The implementation uses OpenAI's [Responses API](https://developers.openai.com/a
 - The server binds to `127.0.0.1` by default.
 - For a Cloud Run or reverse-proxy deployment, set
   `MODEL_COUNCIL_ALLOWED_ORIGINS` to a comma-separated list of exact HTTPS
-  origins. When it is unset, only `http` loopback browser origins are accepted.
+  origins. Set it to `*` only for a demo that should accept browser requests
+  from any origin. When it is unset, only `http` loopback browser origins are
+  accepted.
 - API keys are read from the form only for the current request. They are never written to files, browser storage, cookies, databases, environment files, or request logs.
 - The browser only talks to the local server; the local server makes provider requests.
 - Ollama defaults to `http://127.0.0.1:11434` and rejects non-loopback URLs to avoid becoming an SSRF proxy. To intentionally use a remote Ollama host, launch with `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1`.
