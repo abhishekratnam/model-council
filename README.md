@@ -2,180 +2,378 @@
 
 Model Council is a local-first web app that asks OpenAI, Claude, an Ollama model, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
 
-It is deliberately dependency-free: Python's standard library serves the UI and makes the provider requests. It needs no database, container runtime, or Node.js process.
+The application itself runs as a FastAPI service. For local development, Python dependencies are managed with `uv`, Uvicorn runs the FastAPI application, and Redis can run separately in Docker.
 
-## Run it
+The application supports both host-native and Docker execution. The correct Redis and Ollama URLs depend on where the FastAPI process is running.
 
-Requirements: Python 3.10+ and, optionally, a running [Ollama](https://ollama.com/) installation with at least one pulled model.
+## Requirements
 
-```bash
-cd /home/abhishek/Desktop/Projects/model-council
-python3 server.py
-```
+Install the following:
 
-Open [http://127.0.0.1:8787](http://127.0.0.1:8787). Enter the cloud API keys and model names you want to use, then click **Convene council**.
+- Python 3.10+
+- `uv`
+- Docker
+- API keys for any cloud providers you want to use
+- Ollama only if you want to use a local Ollama model
 
-## Deploy on a Linux host
-
-The lowest-overhead deployment is the included systemd service. It keeps Model Council on loopback only, needs no Docker or database, and restarts after a reboot or failure.
-
-```bash
-cd /path/to/model-council
-./scripts/bootstrap-ollama.sh       # installs Ollama only if absent; then starts it and pulls gemma4 if needed
-sudo ./scripts/install-systemd-service.sh
-```
-
-Check it with:
-
-```bash
-systemctl status model-council
-curl http://127.0.0.1:8787/api/health
-```
-
-The service listens only on `127.0.0.1`, by design. For secure remote access, use an authenticated reverse proxy with TLS or an SSH tunnel; do not expose the app directly to the public internet because users enter provider keys in the browser.
-
-To stop or remove the service:
-
-```bash
-sudo systemctl disable --now model-council
-sudo rm /etc/systemd/system/model-council.service
-sudo systemctl daemon-reload
-```
-
-## Deploy on Google Cloud Run
-
-Cloud Run is suitable for the cloud-provider-only, BYOK version of this app. It
-does not include Ollama: the container has no local Ollama server, so disable
-that card for this deployment.
-
-The included `Dockerfile` runs the application as an unprivileged user on the
-port supplied by Cloud Run. Before deploying, decide the exact HTTPS origin
-users will open, such as `https://council.example.com`. The server accepts
-browser API and WebSocket requests only from that origin when
-`MODEL_COUNCIL_ALLOWED_ORIGINS` is set.
-
-```bash
-gcloud config set project YOUR_PROJECT_ID
-gcloud run deploy model-council \
-  --source . \
-  --region asia-south1 \
-  --port 8080 \
-  --timeout 300 \
-  --concurrency 4 \
-  --max-instances 3 \
-  --allow-unauthenticated \
-  --set-env-vars MODEL_COUNCIL_ALLOWED_ORIGINS=https://council.example.com
-```
-
-The GitHub Actions workflow in `.github/workflows/deploy-cloud-run.yml`
-deploys the same service on pushes to `main` and from manual runs. Configure
-these repository settings under **Settings > Secrets and variables > Actions**:
-
-- Variables: `GCP_PROJECT_ID`, `MODEL_COUNCIL_ALLOWED_ORIGINS`, and optionally
-  `CLOUD_RUN_REGION` if you do not want the default `asia-south1`.
-- Secrets: `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`.
-
-Map `council.example.com` as a Cloud Run custom domain before using that
-command. If you use the generated `run.app` URL instead, set the environment
-variable to that exact HTTPS URL. Deploying the service again is enough to
-change the value.
-
-`--allow-unauthenticated` only makes the Cloud Run endpoint reachable; it does
-not provide user authentication. For a shared deployment, put an authentication
-layer in front of it (for example, an identity-aware proxy) and keep the origin
-allowlist to the single public HTTPS origin. Do not add API keys as Cloud Run
-environment variables: BYOK keys remain in the browser tab and are used only
-for the active request.
-
-This app permits a configurable compatible endpoint, which is useful for a
-trusted personal deployment. For a shared or public deployment, disable that
-option in the UI or restrict it to trusted provider hosts before launch.
-
-## Azure and custom Responses API endpoints
-
-Enable the **Azure & custom** member in the dashboard to add an Azure-hosted deployment as a fourth council member or chair. In Azure mode, enter:
-
-- the Azure resource endpoint, such as `https://YOUR_RESOURCE.openai.azure.com/openai`;
-- the Azure deployment name in **Deployment / model**;
-- the Azure API key and API version.
-
-The dashboard sends that configuration as a request-scoped call to
-`/openai/responses?api-version=...`; it does not write keys or endpoint settings to disk.
-
-For an API gateway or another OpenAI-compatible deployment, select **Compatible Responses API** and enter its complete `/responses` URL. The Advanced JSON panel accepts the same fields, including `headers` and `query_params`:
-
-```json
-{
-  "label": "Azure production",
-  "mode": "azure",
-  "model": "council-deployment",
-  "endpoint": "https://my-resource.openai.azure.com/openai",
-  "auth_type": "api-key",
-  "api_key": "",
-  "query_params": { "api-version": "2025-04-01-preview" },
-  "headers": {}
-}
-```
-
-Supported authentication values are `api-key`, `bearer`, and `none`. JSON is applied only to the open browser tab; its key is still cleared with **Clear keys & results**.
-
-For Ollama, use the bootstrap script above or start it and pull a model manually:
-
-```bash
-ollama serve
-ollama pull gemma4
-```
-
-Gemma 4 (`gemma4`) is the preselected local model and uses Ollama's native chat API, including its system-message support. Use **Refresh** in the Ollama card to confirm it is installed. You can replace `gemma4` with any other installed Ollama model, including a Gemma 4 variant such as `gemma4:e2b`, `gemma4:e4b`, or `gemma4:12b`.
-
-## How a round works
-
-1. The app sends the original question independently to each enabled member, in parallel.
-2. Ollama answers and Ollama-led syntheses stream through a local WebSocket, so text appears as it is generated instead of waiting for the full response.
-3. It displays every answer, skip reason, or provider failure without discarding the successful answers.
-4. You choose which completed answers are evidence for the final pass.
-5. The selected chair receives the original question plus clearly delimited, untrusted council submissions and writes a synthesis.
-
-The implementation uses OpenAI's [Responses API](https://developers.openai.com/api/docs/guides/text), Anthropic's [Messages API](https://platform.claude.com/docs/en/api/messages), and Ollama's native [streaming chat endpoint](https://docs.ollama.com/api/chat). OpenAI requests set `store: false`.
-
-## Key handling and local safety
-
-- The server binds to `127.0.0.1` by default.
-- For a Cloud Run or reverse-proxy deployment, set
-  `MODEL_COUNCIL_ALLOWED_ORIGINS` to a comma-separated list of exact HTTPS
-  origins. Set it to `*` only for a demo that should accept browser requests
-  from any origin. When it is unset, only `http` loopback browser origins are
-  accepted.
-- API keys are read from the form only for the current request. They are never written to files, browser storage, cookies, databases, environment files, or request logs.
-- The browser only talks to the local server; the local server makes provider requests.
-- Ollama defaults to `http://127.0.0.1:11434` and rejects non-loopback URLs to avoid becoming an SSRF proxy. To intentionally use a remote Ollama host, launch with `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1`.
-- Responses support a safe Markdown subset (headings, lists, emphasis, quotes, code, and links). Provider HTML is never inserted into the page.
-- The chair is instructed to treat council output as untrusted reference material, helping guard against prompt injection embedded in a member's answer.
-
-Do not expose this server to a network unless you understand the risk of entering provider keys in a browser. A non-loopback bind requires an explicit `--allow-network` flag.
-
-## Test it
-
-The tests use mocks only; they do not contact OpenAI, Anthropic, or Ollama and do not require real keys.
-
-```bash
-python3 -m unittest discover -s tests -v
-```
+You do **not** need to run the application with Docker Compose for local development.
 
 ## Project layout
 
 ```text
 model-council/
-├── deploy/
-│   └── model-council.service       # systemd service template (loopback only)
-├── scripts/
-│   ├── bootstrap-ollama.sh         # idempotently install/start Ollama and pull gemma4
-│   └── install-systemd-service.sh  # install and start the Model Council service
-├── server.py          # HTTP server, validation, security controls, provider adapters
 ├── static/
-│   ├── index.html     # Local-first UI
-│   ├── styles.css     # Responsive visual design
-│   └── app.js         # Browser-only UI state; no storage use
-└── tests/
-    └── test_server.py # Adapter and council-flow tests
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+├── Dockerfile
+├── docker-compose.yml
+├── fastapi_server.py
+├── memory.py
+├── requirements.txt
+└── README.md
+```
+
+## 1. Install dependencies with uv
+
+From the project directory:
+
+```bash
+cd /path/to/model-council
+
+uv sync
+```
+
+If the project does not already contain a `pyproject.toml`, initialize it first:
+
+```bash
+uv init
+uv add -r requirements.txt
+```
+
+After that, use `uv run` for commands so the correct project environment is used automatically.
+
+## 2. Start Redis separately with Docker
+
+Run Redis as an independent container:
+
+```bash
+docker run -d   --name model-council-redis   -p 6379:6379   redis:7
+```
+
+Verify that the container is running:
+
+```bash
+docker ps
+```
+
+You can also test Redis directly:
+
+```bash
+docker exec model-council-redis redis-cli ping
+```
+
+Expected output:
+
+```text
+PONG
+```
+
+The local application should use:
+
+```text
+redis://127.0.0.1:6379/0
+```
+
+If Redis is already running on port `6379`, do not start a second Redis container.
+
+To stop Redis:
+
+```bash
+docker stop model-council-redis
+```
+
+To start the existing container again:
+
+```bash
+docker start model-council-redis
+```
+
+To remove it:
+
+```bash
+docker rm -f model-council-redis
+```
+
+## 3. Configure environment variables
+
+Create or update your `.env` file with the values required by the application.
+
+### FastAPI running directly on the host
+
+When Uvicorn runs directly on your machine, use:
+
+```env
+MODEL_COUNCIL_REDIS_URL=redis://127.0.0.1:6379/0
+MODEL_COUNCIL_OLLAMA_URL=http://127.0.0.1:11434
+```
+
+### FastAPI running inside Docker
+
+When the FastAPI application runs inside Docker and Redis/Ollama run on the host machine, use Docker's host gateway:
+
+```env
+MODEL_COUNCIL_REDIS_URL=redis://host.docker.internal:6379/0
+MODEL_COUNCIL_OLLAMA_URL=http://host.docker.internal:11434
+```
+
+`host.docker.internal` resolves to the host machine from inside the Docker container. In particular, `127.0.0.1` inside a container refers to the container itself, not the host.
+
+For example, the application can also use:
+
+```env
+MODEL_COUNCIL_MEMORY_TTL=86400
+MODEL_COUNCIL_MEMORY_MAX_ROUNDS=8
+MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
+```
+
+Keep provider API keys out of source control. Add `.env` to `.gitignore` if it is not already there.
+
+Keep provider API keys out of source control. Add `.env` to `.gitignore` if it is not already there.
+
+The browser-supplied provider keys should remain request-scoped and should not be committed to the repository.
+
+## 4. Run the FastAPI application with Uvicorn
+
+Start the application from the project root:
+
+```bash
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8787
+```
+
+For a non-reloading local process:
+
+```bash
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787
+```
+
+The important pieces are:
+
+- `fastapi_server` — the Python module containing the FastAPI application.
+- `app` — the FastAPI application instance.
+- `127.0.0.1` — keeps the development server local to the machine.
+- `8787` — the application port.
+
+## 5. Run Redis and FastAPI together
+
+You can start Redis first:
+
+```bash
+docker start model-council-redis 2>/dev/null || docker run -d --name model-council-redis -p 6379:6379 redis:7
+```
+
+Then start FastAPI in another terminal:
+
+```bash
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+```
+
+The resulting local architecture is:
+
+```text
+Browser
+   │
+   ▼
+FastAPI / Uvicorn
+127.0.0.1:8787
+   │
+   ▼
+Redis
+127.0.0.1:6379
+   │
+   └── Docker container
+```
+
+## 6. Ollama
+
+Ollama is optional.
+
+If Ollama is installed locally:
+
+```bash
+ollama serve
+```
+
+Pull a model, for example:
+
+```bash
+ollama pull gemma4
+```
+
+### FastAPI running directly on the host
+
+Use the normal local Ollama address:
+
+```text
+http://127.0.0.1:11434
+```
+
+### FastAPI running inside Docker
+
+Use:
+
+```text
+http://host.docker.internal:11434
+```
+
+Do **not** use `http://127.0.0.1:11434` from inside the container. There, `127.0.0.1` points back to the container itself.
+
+For example, a Docker-based local setup can use:
+
+```env
+MODEL_COUNCIL_OLLAMA_URL=http://host.docker.internal:11434
+```
+
+The `host.docker.internal` hostname is the Docker-provided route from the container to the host machine.
+
+Use **Refresh** in the Ollama card in the UI to check installed models.
+
+If the application needs to connect to a different or remote Ollama server, configure that explicitly. Do not expose an Ollama endpoint publicly without appropriate network controls.
+
+## 7. Provider configuration
+
+The first council round can use the enabled providers independently.
+
+Typical providers include:
+
+- OpenAI Responses API
+- Anthropic Messages API
+- Ollama
+- Azure OpenAI
+- OpenAI-compatible Responses API deployments
+
+For Azure or a compatible Responses API endpoint, configure the provider through the UI rather than storing credentials in the repository.
+
+Supported authentication modes for compatible Responses API configurations are:
+
+```text
+api-key
+bearer
+none
+```
+
+## 8. How a round works
+
+1. The app sends the original question independently to each enabled council member.
+2. Responses are displayed as they arrive.
+3. Successful answers remain available even when another provider fails or is skipped.
+4. You select which completed answers should be used as evidence.
+5. The selected chair receives the original question plus the selected council submissions and produces the final synthesis.
+
+Ollama responses and Ollama-led synthesis can stream through the application's WebSocket connection.
+
+## 9. Health check
+
+Once the server is running, verify the API:
+
+```bash
+curl http://127.0.0.1:8787/api/health
+```
+
+If the application exposes the health endpoint, it should return a successful response.
+
+## 10. Run tests
+
+Run the test suite with:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+The tests should use mocks and should not require real OpenAI, Anthropic, or Ollama credentials.
+
+## 11. Docker Compose
+
+`docker-compose.yml` can be used when you want the application itself containerized.
+
+When FastAPI runs inside Docker while Redis and Ollama run on the host, use:
+
+```text
+FastAPI container
+    │
+    ├── redis://host.docker.internal:6379/0
+    │
+    └── http://host.docker.internal:11434
+             │
+             ├── Redis on host
+             └── Ollama on host
+```
+
+For normal host-native local development, use:
+
+```text
+FastAPI / Uvicorn
+    │
+    ├── redis://127.0.0.1:6379/0
+    │
+    └── http://127.0.0.1:11434
+```
+
+If Redis is instead another container on the same Docker network, use the Redis service name rather than `localhost` or `host.docker.internal`, for example:
+
+```text
+redis://redis:6379/0
+```
+
+This keeps the application configuration explicit for each execution mode.
+
+## 12. Security notes
+
+The application is designed primarily as a local-first application.
+
+For local development:
+
+- Bind the FastAPI server to `127.0.0.1`.
+- Do not expose the application directly to the public internet.
+- Do not commit provider API keys.
+- Keep Redis bound to the local machine unless remote access is explicitly required.
+- Use an authenticated reverse proxy and TLS before exposing the application to other users.
+
+Because users can enter provider API keys in the browser, public deployment requires additional authentication and network controls.
+
+## Quick start
+
+For a fresh local setup:
+
+### Terminal 1 — Redis
+
+```bash
+docker run -d   --name model-council-redis   -p 6379:6379   redis:7
+```
+
+### Terminal 2 — FastAPI
+
+```bash
+cd /path/to/model-council
+uv sync
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+```
+
+For this host-native setup, your `.env` should point to:
+
+```env
+MODEL_COUNCIL_REDIS_URL=redis://127.0.0.1:6379/0
+MODEL_COUNCIL_OLLAMA_URL=http://127.0.0.1:11434
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787
 ```
