@@ -35,10 +35,26 @@
     customStatus: $("#custom-status"),
     customJson: $("#custom-json"),
     applyCustomJson: $("#apply-custom-json"),
+    // Memory elements
+    memoryEnabled: $("#memory-enabled"),
+    memoryBadge: $("#memory-badge"),
+    newSessionBtn: $("#new-session-btn"),
+    clearMemoryBtn: $("#clear-memory-btn"),
+    memoryHistory: $("#memory-history"),
+    // Modal elements
+    expandFinal: $("#expand-final"),
+    modal: $("#expand-modal"),
+    modalTitle: $("#modal-title"),
+    modalKicker: $("#modal-kicker"),
+    modalMeta: $("#modal-meta"),
+    modalText: $("#modal-text"),
+    modalClose: $("#modal-close"),
+    modalCopy: $("#modal-copy"),
   };
 
   const providers = ["openai", "custom", "anthropic", "ollama"];
   const providerLabels = { openai: "OpenAI", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama" };
+
   const state = {
     members: [],
     question: "",
@@ -53,7 +69,105 @@
     pendingMemberProviders: new Set(),
     memberRenderFrame: null,
     finalRenderFrame: null,
+    // Memory state
+    sessionId: getSessionId(),
+    currentRoundId: "",
   };
+
+  // ── Memory & Session Helpers ──────────────────────────────────────────────
+
+  function getSessionId() {
+    let id = localStorage.getItem("model_council_session_id");
+    if (!id) {
+      id = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+      localStorage.setItem("model_council_session_id", id);
+    }
+    return id;
+  }
+
+  function newSession() {
+    localStorage.removeItem("model_council_session_id");
+    state.sessionId = getSessionId();
+    state.currentRoundId = "";
+    loadMemoryHistory();
+    showToast("Started a new conversation session.");
+  }
+
+  function isMemoryEnabled() {
+    return elements.memoryEnabled ? elements.memoryEnabled.checked : true;
+  }
+
+  function enrichPayload(payload) {
+    return {
+      ...payload,
+      session_id: state.sessionId,
+      memory_enabled: isMemoryEnabled(),
+    };
+  }
+
+  async function loadMemoryHistory() {
+    if (!state.sessionId) return;
+    try {
+      const resp = await fetch(`/api/memory/${state.sessionId}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      renderMemoryHistory(data.rounds || []);
+      updateMemoryBadge(data.available, data.round_count);
+    } catch (e) {
+      console.warn("Memory history unavailable:", e);
+    }
+  }
+
+  function updateMemoryBadge(available, count) {
+    if (!elements.memoryBadge) return;
+    if (!available) {
+      elements.memoryBadge.textContent = "Memory: off (Redis unavailable)";
+      elements.memoryBadge.style.color = "#f87171";
+    } else if (count > 0) {
+      elements.memoryBadge.textContent = `Memory: ${count} round${count > 1 ? "s" : ""}`;
+      elements.memoryBadge.style.color = "#10b981";
+    } else {
+      elements.memoryBadge.textContent = "Memory: empty";
+      elements.memoryBadge.style.color = "#9ca3af";
+    }
+  }
+
+  function renderMemoryHistory(rounds) {
+    if (!elements.memoryHistory) return;
+    if (!rounds.length) {
+      elements.memoryHistory.innerHTML = '<p class="muted">No prior conversation.</p>';
+      return;
+    }
+    elements.memoryHistory.innerHTML = rounds
+      .map((r) => {
+        const synth = r.synthesis
+          ? `<div class="memory-synthesis"><strong>${r.synthesis.label}</strong>: ${r.synthesis.answer.slice(0, 150)}${r.synthesis.answer.length > 150 ? "…" : ""}</div>`
+          : '<div class="muted" style="margin-top: 0.5rem;">No synthesis yet</div>';
+        const ts = new Date(r.timestamp * 1000).toLocaleString();
+        return `<details class="memory-round">
+          <summary>${ts} — ${r.question.slice(0, 60)}${r.question.length > 60 ? "…" : ""}</summary>
+          <div class="memory-round-body">
+            <div class="memory-question">${r.question}</div>
+            ${synth}
+          </div>
+        </details>`;
+      })
+      .join("");
+  }
+
+  async function clearMemory() {
+    if (!state.sessionId) return;
+    if (!confirm("Clear all conversation memory for this session?")) return;
+    try {
+      await fetch(`/api/memory/${state.sessionId}`, { method: "DELETE" });
+      loadMemoryHistory();
+      showToast("Conversation memory cleared.");
+    } catch (e) {
+      showToast("Failed to clear memory.", "error");
+    }
+  }
+
+  // ── Core App Logic ────────────────────────────────────────────────────────
 
   function formatDuration(milliseconds) {
     if (!Number.isFinite(milliseconds)) return "";
@@ -117,7 +231,7 @@
         reject(new Error(message));
       };
 
-      socket.addEventListener("open", () => socket.send(JSON.stringify(payload)));
+      socket.addEventListener("open", () => socket.send(JSON.stringify(enrichPayload(payload))));
       socket.addEventListener("message", (event) => {
         let message;
         try {
@@ -363,7 +477,6 @@
     target.append(document.createTextNode(source.slice(cursor)));
   }
 
-  // Render a useful Markdown subset without ever inserting model-provided HTML.
   function renderMarkdown(container, value) {
     const text = typeof value === "string" ? value.replace(/\r\n?/g, "\n") : "";
     const lines = text.split("\n");
@@ -455,6 +568,7 @@
       includeControl: fragment.querySelector(".include-control"),
       include: fragment.querySelector(".include-member"),
       copy: fragment.querySelector(".copy-button"),
+      expand: fragment.querySelector(".expand-button"),
     };
     view.include.addEventListener("change", () => {
       const current = state.members.find((item) => item.provider === member.provider);
@@ -465,13 +579,26 @@
       const current = state.members.find((item) => item.provider === member.provider);
       copyText(current?.text || "", view.copy);
     });
+    view.expand.addEventListener("click", () => {
+      const current = state.members.find((item) => item.provider === member.provider);
+      openModal(current?.label || "Member", current?.model || "", current?.text || "", "TESTIMONY");
+    });
     elements.memberResults.append(fragment);
     state.memberViews.set(member.provider, view);
     return view;
   }
 
   function patchMember(member) {
+    // If the model is skipped, hide it from the results area completely
+    if (member.status === "skipped") {
+      const view = state.memberViews.get(member.provider);
+      if (view) view.card.hidden = true;
+      return;
+    }
+
     const view = state.memberViews.get(member.provider) || createMemberView(member);
+    view.card.hidden = false; // Ensure it's visible if it was previously hidden
+
     view.card.dataset.provider = member.provider;
     view.card.classList.remove("is-pending", "is-complete", "is-error", "is-skipped");
     view.card.classList.add(`is-${member.status}`);
@@ -489,18 +616,21 @@
       view.includeControl.classList.remove("is-hidden");
       view.include.disabled = false;
       view.copy.disabled = false;
+      view.expand.disabled = false;
     } else if (member.status === "pending") {
       renderMarkdown(view.answer, member.text || "");
       view.detail.textContent = member.text ? "Receiving a streamed response…" : "Waiting for the local server to collect the council's responses.";
       view.includeControl.classList.add("is-hidden");
       view.include.disabled = true;
       view.copy.disabled = true;
+      view.expand.disabled = true;
     } else {
       view.answer.replaceChildren();
       view.detail.textContent = member.detail || "This member was not included in this round.";
       view.includeControl.classList.add("is-hidden");
       view.include.disabled = true;
       view.copy.disabled = true;
+      view.expand.disabled = true;
     }
   }
 
@@ -607,14 +737,17 @@
           scheduleMemberPatch(member.provider);
         }
       });
+
       state.members = Array.isArray(data.members) ? data.members : [];
       state.members.forEach((member) => {
         if (member.status === "complete") member.included = true;
       });
       state.question = typeof data.question === "string" ? data.question : question;
+      state.currentRoundId = data.round_id || ""; // Store round_id for synthesis
       elements.roundTime.textContent = `Round completed in ${formatDuration(data.elapsed_ms)}`;
       renderMembers();
       updateSynthesisControls(true);
+      loadMemoryHistory(); // Refresh memory UI
 
       if (!state.members.some((member) => member.status === "complete")) {
         showToast("No council member completed this round. Check each card for the reason.", "error");
@@ -655,6 +788,7 @@
           model: member.model,
           text: member.text,
         })),
+        round_id: state.currentRoundId, // Send round_id to update memory
         max_tokens: Number(elements.responseLength.value),
         temperature: Math.min(0.8, Number(elements.temperature.value)),
       }, (event) => {
@@ -675,6 +809,7 @@
       renderMarkdown(elements.finalText, state.finalAnswer || "The chair did not return any displayable text.");
       elements.finalAnswer.hidden = false;
       elements.finalAnswer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      loadMemoryHistory(); // Refresh memory UI
     } catch (error) {
       showToast(error.message || "The chair could not complete the synthesis.", "error");
     } finally {
@@ -771,6 +906,7 @@
     state.members = [];
     state.question = "";
     state.finalAnswer = "";
+    state.currentRoundId = "";
     elements.results.hidden = true;
     elements.synthesis.hidden = true;
     elements.finalAnswer.hidden = true;
@@ -779,6 +915,20 @@
     elements.ollamaStatus.textContent = "Not checked yet";
     elements.ollamaStatus.className = "connection-note";
     showToast("Keys, prompt, and council results cleared from this page.");
+  }
+
+  // ── Modal Logic ───────────────────────────────────────────────────────────
+
+  function openModal(title, model, text, kicker) {
+    elements.modalTitle.textContent = title;
+    elements.modalKicker.textContent = kicker;
+    elements.modalMeta.textContent = model;
+    renderMarkdown(elements.modalText, text || "");
+    elements.modal.hidden = false;
+  }
+
+  function closeModal() {
+    elements.modal.hidden = true;
   }
 
   function wireEvents() {
@@ -814,8 +964,33 @@
     elements.copyFinal.addEventListener("click", () => copyText(state.finalAnswer, elements.copyFinal));
     elements.clear.addEventListener("click", clearSession);
     elements.ollamaRefresh.addEventListener("click", refreshOllama);
+
+    // Memory event listeners
+    if (elements.newSessionBtn) elements.newSessionBtn.addEventListener("click", newSession);
+    if (elements.clearMemoryBtn) elements.clearMemoryBtn.addEventListener("click", clearMemory);
+
+    // Expand & Modal Listeners
+    if (elements.expandFinal) {
+      elements.expandFinal.addEventListener("click", () => {
+        openModal(elements.finalTitle.textContent, elements.finalMeta.textContent, state.finalAnswer, "COUNCIL FINDING");
+      });
+    }
+    if (elements.modalClose) elements.modalClose.addEventListener("click", closeModal);
+    if (elements.modalCopy) {
+      elements.modalCopy.addEventListener("click", () => {
+        copyText(elements.modalText.innerText, elements.modalCopy);
+      });
+    }
+    // Close modal if user clicks outside the content box
+    if (elements.modal) {
+      elements.modal.addEventListener("click", (e) => {
+        if (e.target === elements.modal) closeModal();
+      });
+    }
   }
 
+  // Initialize
   wireEvents();
   updateQuestionCount();
+  loadMemoryHistory();
 })();

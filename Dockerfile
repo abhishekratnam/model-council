@@ -2,16 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY --chown=65532:65532 server.py ./
-COPY --chown=65532:65532 static ./static
+COPY requirements.txt .
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8080
+RUN pip install --no-cache-dir -r requirements.txt
 
-USER 65532:65532
-EXPOSE 8080
+COPY . .
 
-# Cloud Run supplies PORT. --allow-network is intentional inside this
-# container; external browser origins remain restricted by the allowlist.
-CMD ["/bin/sh", "-c", "exec python3 server.py --host 0.0.0.0 --port \"${PORT}\" --allow-network"]
+EXPOSE 8787
+
+CMD ["uvicorn", "fastapi_server:app", "--host", "0.0.0.0", "--port", "8787"]

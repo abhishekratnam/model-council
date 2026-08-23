@@ -1,0 +1,13 @@
+
+services:
+  council:
+    build: .
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      MODEL_COUNCIL_REDIS_URL: redis://host.docker.internal:6379/0
+      MODEL_COUNCIL_MEMORY_TTL: "86400"
+      MODEL_COUNCIL_MEMORY_MAX_ROUNDS: "8"
+      MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA: "1"
+    
+    restart: unless-stopped

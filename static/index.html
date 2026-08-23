@@ -241,6 +241,28 @@
           </div>
 
           <button id="clear-session" class="clear-button" type="button">Clear keys &amp; results</button>
+
+          <!-- Memory Panel -->
+        
+          <div class="memory-panel">
+            <div class="memory-header">
+              <div class="memory-toggle-wrapper">
+                <label class="switch" aria-label="Enable conversation memory">
+                  <input id="memory-enabled" type="checkbox" checked />
+                  <span></span>
+                </label>
+                <span class="memory-toggle-label">Remember conversation</span>
+              </div>
+              <span id="memory-badge" class="memory-badge">Memory: empty</span>
+            </div>
+            <div class="memory-actions">
+              <button id="new-session-btn" class="quiet-button" type="button">New Session</button>
+              <button id="clear-memory-btn" class="quiet-button" type="button">Clear Memory</button>
+            </div>
+            <div id="memory-history" class="memory-history">
+              <p class="muted">No prior conversation.</p>
+            </div>
+          </div>
         </aside>
 
         <section class="deliberation-panel">
@@ -329,7 +351,10 @@
                     <span class="final-kicker">COUNCIL FINDING</span>
                     <h3 id="final-title">Final synthesis</h3>
                   </div>
-                  <button id="copy-final" class="copy-button" type="button">Copy</button>
+                  <div class="footer-actions">
+                    <button id="expand-final" class="expand-button" type="button">Expand</button>
+                    <button id="copy-final" class="copy-button" type="button">Copy</button>
+                  </div>
                 </div>
                 <p id="final-meta" class="result-meta"></p>
                 <div id="final-text" class="answer-text"></div>
@@ -341,6 +366,24 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <!-- Expand Modal -->
+    <div id="expand-modal" class="modal-overlay" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="final-kicker" id="modal-kicker"></span>
+            <h3 id="modal-title"></h3>
+          </div>
+          <div class="footer-actions">
+            <button id="modal-copy" class="copy-button" type="button">Copy</button>
+            <button id="modal-close" class="copy-button" type="button">Close</button>
+          </div>
+        </div>
+        <p id="modal-meta" class="result-meta"></p>
+        <div id="modal-text" class="answer-text modal-text-body"></div>
+      </div>
+    </div>
 
     <template id="member-template">
       <article class="member-result">
@@ -364,7 +407,10 @@
             <input class="include-member" type="checkbox" />
             <span>Include in synthesis</span>
           </label>
-          <button class="copy-button" type="button">Copy</button>
+          <div class="footer-actions">
+            <button class="expand-button" type="button">Expand</button>
+            <button class="copy-button" type="button">Copy</button>
+          </div>
         </footer>
       </article>
     </template>
