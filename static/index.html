@@ -178,7 +178,7 @@
                 </label>
               </div>
               <label class="field-label" for="anthropic-model">Model</label>
-              <input id="anthropic-model" class="field-input" value="claude-sonnet-4-5" maxlength="200" spellcheck="false" />
+              <input id="anthropic-model" class="field-input" value="claude" maxlength="200" spellcheck="false" />
               <label class="field-label" for="anthropic-key">API key</label>
               <div class="secret-field">
                 <input
@@ -236,7 +236,11 @@
                 spellcheck="false"
               />
               <datalist id="ollama-model-options"></datalist>
-              <p id="ollama-status" class="connection-note">Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.</p>
+              <p id="ollama-status" class="connection-note">
+                Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.<br><br>
+                <strong>Important:</strong> If you get a connection error, Ollama is blocking browser requests. 
+                Restart it with: <code>OLLAMA_ORIGINS="https://your-app-domain.com" ollama serve</code>
+              </p>
             </article>
           </div>
 

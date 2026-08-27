@@ -210,8 +210,69 @@
     }
     return body;
   }
+    // Add this new function to handle Ollama fetches
+  async function handleOllamaRpc(socket, message) {
+    console.log("✅ Received RPC from FastAPI. Browser is now fetching Ollama directly...");
+    const base_url = $("#ollama-base-url").value.trim() || "http://127.0.0.1:11434";
+    const payload = {
+      model: message.model,
+      stream: true,
+      think: false,
+      messages: message.messages,
+      options: message.options,
+      keep_alive: message.keep_alive || "5m"
+    };
 
-  function streamRequest(payload, onEvent) {
+    try {
+      const response = await fetch(`${base_url}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        socket.send(JSON.stringify({ rpc: "ollama_error", error: `Ollama HTTP ${response.status}` }));
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let final_usage = {};
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const lines = decoder.decode(value).split("\n").filter(l => l.trim());
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if (event.message && event.message.content) {
+              socket.send(JSON.stringify({ rpc: "ollama_chunk", content: event.message.content }));
+            }
+            if (event.done) {
+              final_usage = {
+                prompt_eval_count: event.prompt_eval_count,
+                eval_count: event.eval_count,
+                prompt_eval_duration: event.prompt_eval_duration,
+                eval_duration: event.eval_duration
+              };
+            }
+          } catch (e) {
+            // Ignore partial JSON parse errors
+          }
+        }
+      }
+      socket.send(JSON.stringify({ rpc: "ollama_done", usage: final_usage }));
+
+    } catch (err) {
+      socket.send(JSON.stringify({ 
+        rpc: "ollama_error", 
+        error: "Cannot reach local Ollama from browser. Is it running? (Check OLLAMA_ORIGINS)" 
+      }));
+    }
+  }
+    function streamRequest(payload, onEvent) {
     return new Promise((resolve, reject) => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       let settled = false;
@@ -232,6 +293,7 @@
       };
 
       socket.addEventListener("open", () => socket.send(JSON.stringify(enrichPayload(payload))));
+      
       socket.addEventListener("message", (event) => {
         let message;
         try {
@@ -242,6 +304,13 @@
           return;
         }
         if (!message || typeof message.type !== "string") return;
+
+        // --- NEW: Intercept RPC requests from the server ---
+        if (message.type === "rpc_ollama_chat") {
+          handleOllamaRpc(socket, message);
+          return;
+        }
+
         if (message.type === "error") {
           fail(typeof message.message === "string" ? message.message : "The streaming request could not be completed.");
           socket.close();
@@ -256,6 +325,7 @@
           }
         }
       });
+      
       socket.addEventListener("error", () => fail("Could not open the local streaming connection. Keep the server running and try again."));
       socket.addEventListener("close", () => {
         if (!completed) fail("The local streaming connection closed before the response finished.");
@@ -817,16 +887,29 @@
     }
   }
 
-  async function refreshOllama() {
+    async function refreshOllama() {
     if (elements.ollamaRefresh.disabled) return;
     elements.ollamaRefresh.disabled = true;
     elements.ollamaRefresh.textContent = "Checking…";
     elements.ollamaStatus.textContent = "Checking local Ollama…";
     elements.ollamaStatus.className = "connection-note";
+    
+    const base_url = $("#ollama-base-url").value.trim();
+    const isLocal = base_url.includes("127.0.0.1") || base_url.includes("localhost");
+
     try {
-      const data = await request("/api/ollama/models", {
-        base_url: $("#ollama-base-url").value.trim(),
-      });
+      let data;
+      if (isLocal) {
+        // Bypass FastAPI and fetch directly from the browser!
+        const res = await fetch(`${base_url}/api/tags`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        data = { models: json.models || [] };
+      } else {
+        // Use FastAPI for remote URLs (like Ngrok)
+        data = await request("/api/ollama/models", { base_url: base_url });
+      }
+
       elements.ollamaOptions.replaceChildren();
       const models = Array.isArray(data.models) ? data.models : [];
       const installedModelNames = new Set();

@@ -623,6 +623,60 @@ def call_ollama(
     )
     return extract_ollama_text(response), usage_fields(response, "ollama")
 
+import queue
+
+def ollama_relay_call(
+    config: dict[str, Any], 
+    question: str, 
+    instructions: str, 
+    max_tokens: int, 
+    temperature: float, 
+    emit: Any,
+    browser_rpc_queue: queue.Queue,
+    delta_event_type: str = "member_delta",
+    provider: str = "ollama"
+) -> tuple[str, dict[str, int]]:
+    print("FastAPI is sending RPC to browser to fetch Ollama...")
+    """Asks the browser to fetch from local Ollama and waits for the stream."""
+    emit({
+        "type": "rpc_ollama_chat",
+        "model": provider_model(config),
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": question}
+        ],
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+        "keep_alive": "5m"
+    })
+    
+    chunks: list[str] = []
+    final_usage: dict[str, int] = {}
+    while True:
+        try:
+            # Wait for browser to send chunks back
+            msg = browser_rpc_queue.get(timeout=OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS)
+        except queue.Empty:
+            raise ProviderError("Browser took too long to respond from local Ollama.")
+            
+        rpc_type = msg.get("rpc")
+        if rpc_type == "ollama_chunk":
+            content = msg.get("content", "")
+            if content:
+                chunks.append(content)
+                if delta_event_type == "member_delta":
+                    emit({"type": "member_delta", "provider": provider, "delta": content})
+                else:
+                    emit({"type": delta_event_type, "delta": content})
+        elif rpc_type == "ollama_done":
+            final_usage = msg.get("usage", {})
+            break
+        elif rpc_type == "ollama_error":
+            raise ProviderError(msg.get("error", "Browser failed to reach local Ollama"))
+            
+    text = "".join(chunks).strip()
+    if not text:
+        raise ProviderError("Ollama returned no text output.")
+    return text, final_usage
 
 def call_ollama_stream(
     config: dict[str, Any],
@@ -823,8 +877,7 @@ def run_council(payload: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-
-def run_council_stream(payload: dict[str, Any], emit: Any) -> dict[str, Any]:
+def run_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: queue.Queue) -> dict[str, Any]:
     question = trim_text(payload.get("question"), field="Question", limit=MAX_PROMPT_CHARS, required=True)
     system_prompt = trim_text(
         payload.get("system_prompt", ""), field="Council guidance", limit=MAX_SYSTEM_PROMPT_CHARS
@@ -862,16 +915,40 @@ def run_council_stream(payload: dict[str, Any], emit: Any) -> dict[str, Any]:
                 emit({"type": "member", "member": member.copy()})
                 continue
             emit({"type": "member", "member": member.copy()})
+            
             if provider == "ollama":
-                future = executor.submit(
-                    call_ollama_stream,
-                    config,
-                    effective_question,
-                    instructions,
-                    max_tokens,
-                    temperature,
-                    lambda delta, name=provider: ollama_delta(name, delta),
-                )
+                base_url = config.get("base_url", DEFAULT_OLLAMA_BASE_URL)
+                try:
+                    cleaned_base = clean_ollama_base_url(base_url)
+                    is_localhost = is_loopback_host(urllib.parse.urlsplit(cleaned_base).hostname)
+                except CouncilError:
+                    is_localhost = True 
+                    
+                if is_localhost:
+                    # Relay to browser via WebSocket
+                    future = executor.submit(
+                        ollama_relay_call,
+                        config,
+                        effective_question,
+                        instructions,
+                        max_tokens,
+                        temperature,
+                        emit,
+                        browser_rpc_queue,
+                        "member_delta",
+                        provider,
+                    )
+                else:
+                    # Direct call (e.g., user provided an Ngrok/Tailscale URL)
+                    future = executor.submit(
+                        call_ollama_stream,
+                        config,
+                        effective_question,
+                        instructions,
+                        max_tokens,
+                        temperature,
+                        lambda delta, name=provider: ollama_delta(name, delta),
+                    )
             else:
                 future = executor.submit(
                     call_provider,
@@ -931,6 +1008,111 @@ def run_council_stream(payload: dict[str, Any], emit: Any) -> dict[str, Any]:
     }
 
 
+def synthesize_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: queue.Queue) -> dict[str, Any]:
+    question = trim_text(payload.get("question"), field="Question", limit=MAX_PROMPT_CHARS, required=True)
+    moderator = payload.get("moderator")
+    if moderator not in PROVIDER_LABELS:
+        raise CouncilError("Choose a completed council member as the chair.")
+    config = provider_config(payload, moderator)
+    reason = provider_ready(moderator, config, require_enabled=False)
+    if reason:
+        raise CouncilError(f"{provider_label(moderator, config)} cannot chair yet: {reason}.")
+
+    transcript, selected = make_transcript(question, payload.get("submissions", []))
+
+    session_id = validate_session_id(payload.get("session_id"))
+    memory_enabled = payload.get("memory_enabled", True) is not False and bool(session_id)
+    if memory_enabled and memory_store.available:
+        context = memory_store.build_context(session_id)
+        if context:
+            transcript = f"{context}\n{transcript}"
+
+    round_id = payload.get("round_id", "")
+    if not isinstance(round_id, str):
+        round_id = ""
+    round_id = round_id.strip()[:32]
+
+    max_tokens = bounded_int(payload.get("max_tokens"), default=1_400, minimum=128, maximum=4_096)
+    temperature = bounded_float(payload.get("temperature"), default=0.25, minimum=0, maximum=2)
+    started = time.perf_counter()
+
+    emit(
+        {
+            "type": "synthesis_start",
+            "moderator": moderator,
+            "label": provider_label(moderator, config),
+            "model": provider_model(config),
+        }
+    )
+    try:
+        if moderator == "ollama":
+            base_url = config.get("base_url", DEFAULT_OLLAMA_BASE_URL)
+            try:
+                cleaned_base = clean_ollama_base_url(base_url)
+                is_localhost = is_loopback_host(urllib.parse.urlsplit(cleaned_base).hostname)
+            except CouncilError:
+                is_localhost = True
+
+            if is_localhost:
+                # Relay to browser via WebSocket
+                answer, usage = ollama_relay_call(
+                    config,
+                    transcript,
+                    CHAIR_INSTRUCTIONS,
+                    max_tokens,
+                    temperature,
+                    emit,
+                    browser_rpc_queue,
+                    "synthesis_delta",
+                    moderator,
+                )
+            else:
+                # Direct call (e.g. Ngrok)
+                answer, usage = call_ollama_stream(
+                    config,
+                    transcript,
+                    CHAIR_INSTRUCTIONS,
+                    max_tokens,
+                    temperature,
+                    lambda delta: emit({"type": "synthesis_delta", "delta": delta}),
+                )
+        else:
+            answer, usage = call_provider(
+                moderator, config, transcript, CHAIR_INSTRUCTIONS, max_tokens, temperature
+            )
+    except ProviderError:
+        raise
+    except Exception as error:
+        raise ProviderError("The chair could not complete the synthesis.") from error
+
+    answer, was_truncated = truncate(answer, MAX_PROVIDER_OUTPUT_CHARS)
+
+    if memory_enabled and round_id:
+        memory_store.update_synthesis(
+            session_id,
+            round_id,
+            {
+                "moderator": moderator,
+                "label": provider_label(moderator, config),
+                "model": provider_model(config),
+                "answer": answer,
+            },
+        )
+
+    return {
+        "moderator": moderator,
+        "label": provider_label(moderator, config),
+        "model": provider_model(config),
+        "answer": answer,
+        "latency_ms": round((time.perf_counter() - started) * 1_000),
+        "usage": usage,
+        "truncated": was_truncated,
+        "submission_count": len(selected),
+        "memory": {
+            "enabled": memory_enabled,
+            "available": memory_store.available,
+        },
+    }
 # ── Synthesis ─────────────────────────────────────────────────────────────────
 
 
@@ -1041,91 +1223,6 @@ def synthesize_council(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def synthesize_council_stream(payload: dict[str, Any], emit: Any) -> dict[str, Any]:
-    question = trim_text(payload.get("question"), field="Question", limit=MAX_PROMPT_CHARS, required=True)
-    moderator = payload.get("moderator")
-    if moderator not in PROVIDER_LABELS:
-        raise CouncilError("Choose a completed council member as the chair.")
-    config = provider_config(payload, moderator)
-    reason = provider_ready(moderator, config, require_enabled=False)
-    if reason:
-        raise CouncilError(f"{provider_label(moderator, config)} cannot chair yet: {reason}.")
-
-    transcript, selected = make_transcript(question, payload.get("submissions", []))
-
-    session_id = validate_session_id(payload.get("session_id"))
-    memory_enabled = payload.get("memory_enabled", True) is not False and bool(session_id)
-    if memory_enabled and memory_store.available:
-        context = memory_store.build_context(session_id)
-        if context:
-            transcript = f"{context}\n{transcript}"
-
-    round_id = payload.get("round_id", "")
-    if not isinstance(round_id, str):
-        round_id = ""
-    round_id = round_id.strip()[:32]
-
-    max_tokens = bounded_int(payload.get("max_tokens"), default=1_400, minimum=128, maximum=4_096)
-    temperature = bounded_float(payload.get("temperature"), default=0.25, minimum=0, maximum=2)
-    started = time.perf_counter()
-
-    emit(
-        {
-            "type": "synthesis_start",
-            "moderator": moderator,
-            "label": provider_label(moderator, config),
-            "model": provider_model(config),
-        }
-    )
-    try:
-        if moderator == "ollama":
-            answer, usage = call_ollama_stream(
-                config,
-                transcript,
-                CHAIR_INSTRUCTIONS,
-                max_tokens,
-                temperature,
-                lambda delta: emit({"type": "synthesis_delta", "delta": delta}),
-            )
-        else:
-            answer, usage = call_provider(
-                moderator, config, transcript, CHAIR_INSTRUCTIONS, max_tokens, temperature
-            )
-    except ProviderError:
-        raise
-    except Exception as error:
-        raise ProviderError("The chair could not complete the synthesis.") from error
-
-    answer, was_truncated = truncate(answer, MAX_PROVIDER_OUTPUT_CHARS)
-
-    if memory_enabled and round_id:
-        memory_store.update_synthesis(
-            session_id,
-            round_id,
-            {
-                "moderator": moderator,
-                "label": provider_label(moderator, config),
-                "model": provider_model(config),
-                "answer": answer,
-            },
-        )
-
-    return {
-        "moderator": moderator,
-        "label": provider_label(moderator, config),
-        "model": provider_model(config),
-        "answer": answer,
-        "latency_ms": round((time.perf_counter() - started) * 1_000),
-        "usage": usage,
-        "truncated": was_truncated,
-        "submission_count": len(selected),
-        "memory": {
-            "enabled": memory_enabled,
-            "available": memory_store.available,
-        },
-    }
-
-
 # ── Ollama model listing ──────────────────────────────────────────────────────
 
 
@@ -1191,9 +1288,10 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    # Broadened CSP to allow any localhost/127.0.0.1 port and websockets
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
-        "style-src 'self'; script-src 'self'; base-uri 'none'; "
+        "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https:; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; "
         "frame-ancestors 'none'; form-action 'self'"
     )
     return response
@@ -1296,7 +1394,6 @@ async def _safe_ws_send(websocket: WebSocket, payload: dict[str, Any]) -> None:
     except (RuntimeError, WebSocketDisconnect):
         pass
 
-
 @app.websocket("/api/council/stream")
 async def council_stream(websocket: WebSocket):
     origin = websocket.headers.get("Origin")
@@ -1305,6 +1402,25 @@ async def council_stream(websocket: WebSocket):
         return
 
     await websocket.accept()
+
+    # Thread-safe queue to pass browser responses back to the ThreadPoolExecutor
+    browser_rpc_queue = queue.Queue()
+
+    async def listen_for_browser_rpcs():
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                    if isinstance(msg, dict) and msg.get("rpc"):
+                        browser_rpc_queue.put(msg)
+                except json.JSONDecodeError:
+                    pass
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+
+    # Start listening in the background
+    rpc_listener = asyncio.create_task(listen_for_browser_rpcs())
 
     try:
         raw = await websocket.receive_text()
@@ -1324,10 +1440,10 @@ async def council_stream(websocket: WebSocket):
                 pass
 
         if action == "ask":
-            result = await asyncio.to_thread(run_council_stream, body, emit)
+            result = await asyncio.to_thread(run_council_stream, body, emit, browser_rpc_queue)
             await _safe_ws_send(websocket, {"type": "round_complete", "result": result})
         elif action == "synthesize":
-            result = await asyncio.to_thread(synthesize_council_stream, body, emit)
+            result = await asyncio.to_thread(synthesize_council_stream, body, emit, browser_rpc_queue)
             await _safe_ws_send(websocket, {"type": "synthesis_complete", "result": result})
         else:
             raise CouncilError("Unknown streaming action.")
@@ -1335,14 +1451,13 @@ async def council_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         return
     except json.JSONDecodeError:
-        await _safe_ws_send(
-            websocket, {"type": "error", "message": "WebSocket request must be valid JSON."}
-        )
+        await _safe_ws_send(websocket, {"type": "error", "message": "WebSocket request must be valid JSON."})
     except (CouncilError, ProviderError) as exc:
         await _safe_ws_send(websocket, {"type": "error", "message": scrub_secrets(str(exc))})
     except Exception:
         await _safe_ws_send(websocket, {"type": "error", "message": "Unexpected server error."})
     finally:
+        rpc_listener.cancel()
         try:
             if websocket.application_state == WebSocketState.CONNECTED:
                 await websocket.close()

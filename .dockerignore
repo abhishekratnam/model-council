@@ -8,3 +8,5 @@ tests
 deploy
 scripts
 README.md
+._*
+.DS_Store
