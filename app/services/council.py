@@ -5,8 +5,10 @@ import urllib.parse
 from typing import Any
 from app.core.config import (
     MAX_PROMPT_CHARS, MAX_SYSTEM_PROMPT_CHARS, MAX_PROVIDER_OUTPUT_CHARS, MAX_SUBMISSION_CHARS,
-    MEMBER_INSTRUCTIONS, CHAIR_INSTRUCTIONS, PROVIDER_LABELS, DEFAULT_OLLAMA_BASE_URL, memory_store
+    MEMBER_INSTRUCTIONS, CHAIR_INSTRUCTIONS, PROVIDER_LABELS, DEFAULT_OLLAMA_BASE_URL
 )
+
+from app.core.memory import memory_store
 from app.core.exceptions import CouncilError, ProviderError
 from app.core.memory import generate_round_id
 from app.services.validation import trim_text, bounded_int, bounded_float, truncate, validate_session_id
@@ -73,6 +75,17 @@ def run_council(payload: dict[str, Any]) -> dict[str, Any]:
                 member.update({
                     "status": "complete", "text": text, "latency_ms": elapsed_ms, "usage": usage, "truncated": was_truncated
                 })
+                # ── NEW: Log Analytics ──────────────────────────────
+                # Extract total tokens based on provider type
+                total_tokens = 0
+                if provider in ["openai", "anthropic", "custom"]:
+                    total_tokens = usage.get("total_tokens", usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+                elif provider == "ollama":
+                    total_tokens = usage.get("eval_count", 0)
+                
+                memory_store.log_usage(provider, member["model"], total_tokens, elapsed_ms)
+                # ────────────────────────────────────────────────────
+                
             except ProviderError as error:
                 member.update({"status": "error", "detail": scrub_secrets(str(error)), "latency_ms": elapsed_ms})
             except Exception:

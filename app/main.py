@@ -4,7 +4,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from app.core.config import memory_store, logger, settings,  STATIC_DIR
+
+from app.core.memory import memory_store
+from app.core.config import logger, settings,  STATIC_DIR
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.security import is_safe_browser_origin, scrub_secrets, is_loopback_host
 from app.api.routes import router as api_router

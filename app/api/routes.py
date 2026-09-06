@@ -5,8 +5,9 @@ from app.services.council import run_council, synthesize_council, _memory_histor
 from app.services.ollama import ollama_models
 from app.services.validation import validate_session_id
 from app.core.exceptions import CouncilError
-from app.core.config import memory_store, DEFAULT_OLLAMA_BASE_URL
+from app.core.config import  DEFAULT_OLLAMA_BASE_URL
 
+from app.core.memory import memory_store
 router = APIRouter()
 
 @router.get("/health")
@@ -21,6 +22,12 @@ async def health():
             "max_rounds": memory_store.max_rounds,
         },
     }
+# In app/api/routes.py
+
+@router.get("/analytics")
+async def get_analytics():
+    """Retrieve token usage, cost estimates, and latency metrics."""
+    return await asyncio.to_thread(memory_store.get_usage_analytics)
 
 @router.post("/council/ask")
 async def council_ask(payload: AskPayload):

@@ -3,12 +3,6 @@ import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.memory import (
-    DEFAULT_MAX_ROUNDS,
-    DEFAULT_REDIS_URL,
-    DEFAULT_TTL_SECONDS,
-    MemoryStore,
-)
 
 # ── Settings Manager ─────────────────────────────────────────────────────────
 
@@ -21,11 +15,11 @@ class Settings(BaseSettings):
     # Security
     MODEL_COUNCIL_ALLOWED_ORIGINS: str = ""
     MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA: bool = False
-    
+
     # Redis / Memory
-    MODEL_COUNCIL_REDIS_URL: str = DEFAULT_REDIS_URL
-    MODEL_COUNCIL_MEMORY_TTL: int = DEFAULT_TTL_SECONDS
-    MODEL_COUNCIL_MEMORY_MAX_ROUNDS: int = DEFAULT_MAX_ROUNDS
+    MODEL_COUNCIL_REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    MODEL_COUNCIL_MEMORY_TTL: int = 86400
+    MODEL_COUNCIL_MEMORY_MAX_ROUNDS: int = 8
     
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -76,10 +70,12 @@ PROVIDER_LABELS = {
     "custom": "Azure / custom",
 }
 
+# Estimated cost per 1,000 tokens (blended input/output rates in USD)
+PRICING_PER_1K_TOKENS = {
+    "openai": 0.005,      # e.g., GPT-4o-mini is cheaper, GPT-4o is ~$0.01
+    "anthropic": 0.015,   # e.g., Claude 3.5 Sonnet
+    "ollama": 0.1,        # Local models are free
+    "custom": 0.005,      # Default for Azure/custom endpoints
+}
 # ── Redis Memory (global singleton) ───────────────────────────────────────────
 
-memory_store = MemoryStore(
-    url=settings.MODEL_COUNCIL_REDIS_URL,
-    ttl_seconds=settings.MODEL_COUNCIL_MEMORY_TTL,
-    max_rounds=settings.MODEL_COUNCIL_MEMORY_MAX_ROUNDS,
-)
