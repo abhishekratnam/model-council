@@ -56,6 +56,54 @@
           </div>
 
           <div class="provider-stack">
+
+            <article class="provider-card provider-ollama" data-provider-card="ollama">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph ollama-glyph" aria-hidden="true">◒</span>
+                  <div>
+                    <h3>Ollama</h3>
+                    <p>Local council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable Ollama">
+                  <input id="ollama-enabled" type="checkbox" checked />
+                  <span></span>
+                </label>
+              </div>
+              <div class="inline-label-row">
+                <label class="field-label" for="ollama-base-url">Local server</label>
+                <span class="local-only">loopback only</span>
+              </div>
+              <input
+                id="ollama-base-url"
+                class="field-input field-input-small"
+                value="http://127.0.0.1:11434"
+                maxlength="300"
+                inputmode="url"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <div class="inline-label-row model-row">
+                <label class="field-label" for="ollama-model">Local model</label>
+                <button id="refresh-ollama" class="quiet-button" type="button">Refresh</button>
+              </div>
+              <input
+                id="ollama-model"
+                class="field-input"
+                list="ollama-model-options"
+                placeholder="Choose or type a local model"
+                maxlength="200"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <datalist id="ollama-model-options"></datalist>
+              <p id="ollama-status" class="connection-note">
+                Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.<br><br>
+                <strong>Important:</strong> If you get a connection error, Ollama is blocking browser requests. 
+                Restart it with: <code>OLLAMA_ORIGINS="https://your-app-domain.com" ollama serve</code>
+              </p>
+            </article>
             <article class="provider-card provider-openai" data-provider-card="openai">
               <div class="provider-head">
                 <div class="provider-title">
@@ -66,7 +114,7 @@
                   </div>
                 </div>
                 <label class="switch" aria-label="Enable OpenAI">
-                  <input id="openai-enabled" type="checkbox" checked />
+                  <input id="openai-enabled" type="checkbox" />
                   <span></span>
                 </label>
               </div>
@@ -173,7 +221,7 @@
                   </div>
                 </div>
                 <label class="switch" aria-label="Enable Claude">
-                  <input id="anthropic-enabled" type="checkbox" checked />
+                  <input id="anthropic-enabled" type="checkbox" />
                   <span></span>
                 </label>
               </div>
@@ -194,54 +242,6 @@
               </div>
             </article>
 
-            <article class="provider-card provider-ollama" data-provider-card="ollama">
-              <div class="provider-head">
-                <div class="provider-title">
-                  <span class="provider-glyph ollama-glyph" aria-hidden="true">◒</span>
-                  <div>
-                    <h3>Ollama</h3>
-                    <p>Local council member</p>
-                  </div>
-                </div>
-                <label class="switch" aria-label="Enable Ollama">
-                  <input id="ollama-enabled" type="checkbox" checked />
-                  <span></span>
-                </label>
-              </div>
-              <div class="inline-label-row">
-                <label class="field-label" for="ollama-base-url">Local server</label>
-                <span class="local-only">loopback only</span>
-              </div>
-              <input
-                id="ollama-base-url"
-                class="field-input field-input-small"
-                value="http://127.0.0.1:11434"
-                maxlength="300"
-                inputmode="url"
-                autocapitalize="off"
-                spellcheck="false"
-              />
-              <div class="inline-label-row model-row">
-                <label class="field-label" for="ollama-model">Local model</label>
-                <button id="refresh-ollama" class="quiet-button" type="button">Refresh</button>
-              </div>
-              <input
-                id="ollama-model"
-                class="field-input"
-                list="ollama-model-options"
-                value="gemma4"
-                placeholder="Choose or type a local model"
-                maxlength="200"
-                autocapitalize="off"
-                spellcheck="false"
-              />
-              <datalist id="ollama-model-options"></datalist>
-              <p id="ollama-status" class="connection-note">
-                Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.<br><br>
-                <strong>Important:</strong> If you get a connection error, Ollama is blocking browser requests. 
-                Restart it with: <code>OLLAMA_ORIGINS="https://your-app-domain.com" ollama serve</code>
-              </p>
-            </article>
           </div>
 
           <button id="clear-session" class="clear-button" type="button">Clear keys &amp; results</button>

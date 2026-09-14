@@ -1,8 +1,8 @@
-version: '3.8'
 
 services:
   web:
     build: .
+    
     ports:
       - "8787:8787"
     environment:
@@ -10,10 +10,10 @@ services:
       - PORT=8787
       - MODEL_COUNCIL_ALLOW_NETWORK=1
       # Points to the redis service below
-      - MODEL_COUNCIL_REDIS_URL=redis://redis:6379/0
+      - MODEL_COUNCIL_REDIS_URL=redis://host.docker.internal:6379/0
       # Optional: Set your allowed browser origins here
       # - MODEL_COUNCIL_ALLOWED_ORIGINS=http://localhost:8787
     volumes:
+      - .:/app
       # Map local static folder for easy frontend updates without rebuilding
-      - ./static:/app/static
   
