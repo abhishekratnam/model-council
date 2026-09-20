@@ -12,6 +12,7 @@
     temperature: $("#temperature"),
     temperatureValue: $("#temperature-value"),
     ask: $("#ask-council"),
+    cancel: $("#cancel-council"),
     clear: $("#clear-session"),
     memberCount: $("#member-count"),
     results: $("#results-section"),
@@ -61,6 +62,7 @@
     finalAnswer: "",
     toastTimer: null,
     asking: false,
+    councilStopped: false,
     synthesizing: false,
     streamSocket: null,
     customHeaders: {},
@@ -223,11 +225,15 @@
       keep_alive: message.keep_alive || "5m"
     };
 
+    const controller = new AbortController();
+    socket.addEventListener("close", () => controller.abort());
+
     try {
       const response = await fetch(`${base_url}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -240,6 +246,7 @@
       let final_usage = {};
 
       while (true) {
+        if (socket.readyState !== WebSocket.OPEN) break;
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -266,9 +273,10 @@
       socket.send(JSON.stringify({ rpc: "ollama_done", usage: final_usage }));
 
     } catch (err) {
-      socket.send(JSON.stringify({ 
-        rpc: "ollama_error", 
-        error: "Cannot reach local Ollama from browser. Is it running? (Check OLLAMA_ORIGINS)" 
+      if (err.name === "AbortError") return;   // expected after a stop or socket close
+      socket.send(JSON.stringify({
+        rpc: "ollama_error",
+        error: "Cannot reach local Ollama from browser. Is it running? (Check OLLAMA_ORIGINS)"
       }));
     }
   }
@@ -470,6 +478,8 @@
     elements.ask.disabled = busy;
     elements.ask.classList.toggle("is-loading", busy);
     elements.ask.querySelector(".button-label").textContent = busy ? "Council deliberating" : "Convene council";
+    setCancelButton(busy);
+    if (!busy) state.councilStopped = false;
   }
 
   function setSynthesisBusy(busy) {
@@ -477,15 +487,45 @@
     elements.synthesize.disabled = busy || getSelectedMembers().length === 0;
     elements.synthesize.textContent = busy ? "Synthesizing…" : "Synthesize";
   }
+    // ── Council cancellation ──────────────────────────────────────────────────
+  function setCancelButton(visible, label = "Stop council") {
+    if (!elements.cancel) return;
+    elements.cancel.hidden = !visible;
+    elements.cancel.disabled = false;
+    const labelEl = elements.cancel.querySelector(".button-label");
+    if (labelEl) labelEl.textContent = label;
+  }
+
+  async function cancelCouncil() {
+    if (!state.asking) return;
+    if (!state.currentRoundId) return;   // round_start hasn't arrived yet
+    elements.cancel.disabled = true;
+    const labelEl = elements.cancel.querySelector(".button-label");
+    if (labelEl) labelEl.textContent = "Stopping…";
+    try {
+      await fetch(`/api/council/cancel/${encodeURIComponent(state.currentRoundId)}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    } catch (_) {
+      /* the stream still delivers council_cancelled even if this fails */
+    }
+  }
+
+  window.addEventListener("pagehide", () => {
+    if (state.asking && state.currentRoundId) {
+      navigator.sendBeacon(`/api/council/cancel/${encodeURIComponent(state.currentRoundId)}`);
+    }
+  });
 
   function getSelectedMembers() {
     return state.members.filter((member) => member.status === "complete" && member.included !== false);
   }
-
   function statusLabel(status) {
     return {
       pending: "Thinking",
       complete: "Ready",
+      cancelled: "Stopped",
       error: "Unavailable",
       skipped: "Skipped",
     }[status] || "Unknown";
@@ -498,6 +538,7 @@
       if (member.truncated) parts.push("output limited for display");
       return parts.join(" · ") || "Response received";
     }
+    if (member.status === "cancelled") return "Stopped mid-answer — partial text kept.";  
     if (member.status === "pending") return member.text ? "Streaming response…" : "This member is considering the question…";
     return "";
   }
@@ -658,8 +699,12 @@
     return view;
   }
 
-  function patchMember(member) {
-    // If the model is skipped, hide it from the results area completely
+  function renderMembers() {
+    state.memberViews.clear();
+    elements.memberResults.replaceChildren();
+    state.members.forEach(patchMember);
+  }
+    function patchMember(member) {
     if (member.status === "skipped") {
       const view = state.memberViews.get(member.provider);
       if (view) view.card.hidden = true;
@@ -667,10 +712,10 @@
     }
 
     const view = state.memberViews.get(member.provider) || createMemberView(member);
-    view.card.hidden = false; // Ensure it's visible if it was previously hidden
+    view.card.hidden = false;
 
     view.card.dataset.provider = member.provider;
-    view.card.classList.remove("is-pending", "is-complete", "is-error", "is-skipped");
+    view.card.classList.remove("is-pending", "is-complete", "is-error", "is-skipped", "is-cancelled");
     view.card.classList.add(`is-${member.status}`);
     view.name.textContent = member.label || providerLabels[member.provider] || "Member";
     view.model.textContent = member.model || "No model selected";
@@ -687,6 +732,13 @@
       view.include.disabled = false;
       view.copy.disabled = false;
       view.expand.disabled = false;
+    } else if (member.status === "cancelled") {
+      renderMarkdown(view.answer, member.text || "");
+      view.detail.textContent = "Stopped by user before this member finished.";
+      view.includeControl.classList.add("is-hidden");
+      view.include.disabled = true;
+      view.copy.disabled = true;
+      view.expand.disabled = true;
     } else if (member.status === "pending") {
       renderMarkdown(view.answer, member.text || "");
       view.detail.textContent = member.text ? "Receiving a streamed response…" : "Waiting for the local server to collect the council's responses.";
@@ -702,12 +754,6 @@
       view.copy.disabled = true;
       view.expand.disabled = true;
     }
-  }
-
-  function renderMembers() {
-    state.memberViews.clear();
-    elements.memberResults.replaceChildren();
-    state.members.forEach(patchMember);
   }
 
   function scheduleMemberPatch(provider) {
@@ -771,7 +817,6 @@
     elements.roundTime.textContent = "Council is deliberating…";
     renderMembers();
   }
-
   async function askCouncil() {
     if (state.asking) return;
     const question = elements.question.value.trim();
@@ -793,7 +838,16 @@
         max_tokens: Number(elements.responseLength.value),
         temperature: Number(elements.temperature.value),
       }, (event) => {
-        if (event.type === "member" || event.type === "member_complete") {
+        if (event.type === "round_start") {
+          state.currentRoundId = event.round_id || "";
+        } else if (event.type === "council_cancelled") {
+          state.councilStopped = true;
+          state.members.forEach((member) => {
+            if (member.status === "pending") member.status = "cancelled";
+          });
+          renderMembers();
+          showToast("Stopping the council — completed answers are kept.");
+        } else if (event.type === "member" || event.type === "member_complete") {
           const member = event.member;
           if (!member || typeof member.provider !== "string") return;
           const index = state.members.findIndex((item) => item.provider === member.provider);
@@ -801,6 +855,7 @@
           else state.members.push(member);
           scheduleMemberPatch(member.provider);
         } else if (event.type === "member_delta") {
+          if (state.councilStopped) return;
           const member = state.members.find((item) => item.provider === event.provider);
           if (!member || typeof event.delta !== "string") return;
           member.text = `${member.text || ""}${event.delta}`;
@@ -813,11 +868,13 @@
         if (member.status === "complete") member.included = true;
       });
       state.question = typeof data.question === "string" ? data.question : question;
-      state.currentRoundId = data.round_id || ""; // Store round_id for synthesis
-      elements.roundTime.textContent = `Round completed in ${formatDuration(data.elapsed_ms)}`;
+      state.currentRoundId = data.round_id || "";
+      elements.roundTime.textContent = data.cancelled
+        ? "Council stopped — partial results kept"
+        : `Round completed in ${formatDuration(data.elapsed_ms)}`;
       renderMembers();
       updateSynthesisControls(true);
-      loadMemoryHistory(); // Refresh memory UI
+      loadMemoryHistory();
 
       if (!state.members.some((member) => member.status === "complete")) {
         showToast("No council member completed this round. Check each card for the reason.", "error");
@@ -830,7 +887,6 @@
       setAskBusy(false);
     }
   }
-
   async function synthesizeCouncil() {
     if (state.synthesizing) return;
     const selected = getSelectedMembers();
@@ -971,6 +1027,9 @@
   }
 
   function clearSession() {
+    if (state.asking && state.currentRoundId) {
+      navigator.sendBeacon(`/api/council/cancel/${encodeURIComponent(state.currentRoundId)}`);
+    }
     if (state.streamSocket) state.streamSocket.close();
     if (state.memberRenderFrame !== null) window.cancelAnimationFrame(state.memberRenderFrame);
     if (state.finalRenderFrame !== null) window.cancelAnimationFrame(state.finalRenderFrame);
@@ -1043,6 +1102,7 @@
       });
     });
     elements.ask.addEventListener("click", askCouncil);
+    elements.cancel.addEventListener("click", cancelCouncil);
     elements.synthesize.addEventListener("click", synthesizeCouncil);
     elements.copyFinal.addEventListener("click", () => copyText(state.finalAnswer, elements.copyFinal));
     elements.clear.addEventListener("click", clearSession);

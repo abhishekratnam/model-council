@@ -1442,3 +1442,55 @@ input[type="range"] {
   font-size: 15px;
   line-height: 1.78;
 }
+/* ── Stop button ── */
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.8rem 1.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(229, 72, 77, 0.55);
+  background: rgba(229, 72, 77, 0.10);
+  color: #e5484d;
+  font-weight: 600;
+  font-size: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: rgba(229, 72, 77, 0.22);
+}
+
+.danger-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.stop-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+/* ── Cancelled member cards ── */
+.is-cancelled {
+  opacity: 0.65;
+}
+
+.is-cancelled .result-status,
+.result-status.status-cancelled {
+  color: #e5484d;
+  font-weight: 600;
+}
+
+.is-cancelled .answer-text {
+  opacity: 0.75;
+}
