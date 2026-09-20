@@ -7,7 +7,7 @@ from app.core.config import (
     MAX_PROMPT_CHARS, MAX_SYSTEM_PROMPT_CHARS, MAX_PROVIDER_OUTPUT_CHARS, MAX_SUBMISSION_CHARS,
     MEMBER_INSTRUCTIONS,REVISION_INSTRUCTIONS, CHAIR_INSTRUCTIONS,CHAIR_FINAL_INSTRUCTIONS, PROVIDER_LABELS, DEFAULT_OLLAMA_BASE_URL
 )
-
+from app.core.run_registy import register_run, finish_run
 from app.core.memory import memory_store
 from app.core.exceptions import CouncilError, ProviderError
 from app.core.memory import generate_round_id
@@ -211,71 +211,98 @@ def run_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: qu
     memory_enabled = payload.get("memory_enabled", True) is not False and bool(session_id)
     effective_question = _prepare_question_with_memory(question, session_id, memory_enabled)
     round_id = generate_round_id()
+    emit({"type": "round_start", "round_id": round_id})
+    cancel_event = register_run(round_id)
 
     started = time.perf_counter()
     members: dict[str, dict[str, Any]] = {}
     jobs: dict[concurrent.futures.Future, str] = {}
+    synthesis = None
+    revision_members: list[dict[str, Any]] = []
+    disagreement = {"agreement": "unknown", "conflicts": []}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(PROVIDER_LABELS), thread_name_prefix="council") as executor:
-        for provider in PROVIDER_LABELS:
-            config = provider_config(payload, provider)
-            member = member_shell(provider, config)
-            members[provider] = member
-            reason = provider_ready(provider, config, require_enabled=True)
-            if reason:
-                member.update({"status": "skipped", "detail": reason})
+    # Manual lifecycle instead of `with`: the context manager blocks on exit
+    # waiting for in-flight provider calls — exactly what cancellation must avoid.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(PROVIDER_LABELS),
+                                                     thread_name_prefix="council")
+    cancelled = False
+    try:
+        try:
+            for provider in PROVIDER_LABELS:
+                config = provider_config(payload, provider)
+                member = member_shell(provider, config)
+                members[provider] = member
+                reason = provider_ready(provider, config, require_enabled=True)
+                if reason:
+                    member.update({"status": "skipped", "detail": reason})
+                    emit({"type": "member", "member": member.copy()})
+                    continue
                 emit({"type": "member", "member": member.copy()})
-                continue
-            emit({"type": "member", "member": member.copy()})
-            jobs[_submit_member(executor, provider, config, effective_question, instructions,
-                                max_tokens, temperature, emit, browser_rpc_queue)] = provider
+                jobs[_submit_member(executor, provider, config, effective_question, instructions,
+                                    max_tokens, temperature, emit, browser_rpc_queue)] = provider
 
-        for future in concurrent.futures.as_completed(jobs):
-            provider = jobs[future]
-            member = members[provider]
-            elapsed_ms = round((time.perf_counter() - started) * 1_000)
-            try:
-                text, usage = future.result()
-                text, was_truncated = truncate(text, MAX_PROVIDER_OUTPUT_CHARS)
-                member.update({"status": "complete", "text": text, "latency_ms": elapsed_ms,
-                               "usage": usage, "truncated": was_truncated})
-                memory_store.log_usage(provider, member.get("model", "unknown"),
-                                       _extract_total_tokens(provider, usage), elapsed_ms)
-            except ProviderError as error:
-                member.update({"status": "error", "detail": scrub_secrets(str(error)), "latency_ms": elapsed_ms})
-            except Exception:
-                member.update({"status": "error", "detail": "The provider could not complete this request.", "latency_ms": elapsed_ms})
-            emit({"type": "member_complete", "member": member.copy()})
+            for future in concurrent.futures.as_completed(jobs):
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+                provider = jobs[future]
+                member = members[provider]
+                elapsed_ms = round((time.perf_counter() - started) * 1_000)
+                try:
+                    text, usage = future.result()
+                    text, was_truncated = truncate(text, MAX_PROVIDER_OUTPUT_CHARS)
+                    member.update({"status": "complete", "text": text, "latency_ms": elapsed_ms,
+                                   "usage": usage, "truncated": was_truncated})
+                    memory_store.log_usage(provider, member.get("model", "unknown"),
+                                           _extract_total_tokens(provider, usage), elapsed_ms)
+                except ProviderError as error:
+                    member.update({"status": "error", "detail": scrub_secrets(str(error)), "latency_ms": elapsed_ms})
+                except Exception:
+                    member.update({"status": "error", "detail": "The provider could not complete this request.", "latency_ms": elapsed_ms})
+                emit({"type": "member_complete", "member": member.copy()})
 
-        completed_members = [m for m in members.values() if m.get("status") == "complete"]
+            completed_members = [m for m in members.values() if m.get("status") == "complete"]
+        finally:
+            # Cancelled: drop queued jobs, don't wait for in-flight HTTP.
+            # (cancel_futures needs Python 3.9+; on 3.8 use executor.shutdown(wait=False))
+            executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
 
-    # ── Disagreement detection + synthesis (single pass, all events included) ──
-    synthesis, revision_members, disagreement = _deliberate_and_synthesize(
-        payload, completed_members, effective_question, max_tokens, temperature,
-        emit=emit, browser_rpc_queue=browser_rpc_queue)
+        if cancelled:
+            emit({"type": "council_cancelled"})
+            for member in members.values():
+                if member.get("status") == "pending":
+                    member["status"] = "cancelled"
+        else:
+            # ── Disagreement detection + synthesis (single pass, all events included) ──
+            synthesis, revision_members, disagreement = _deliberate_and_synthesize(
+                payload, completed_members, effective_question, max_tokens, temperature,
+                emit=emit, browser_rpc_queue=browser_rpc_queue)
 
-    if memory_enabled and completed_members:
-        memory_store.store_round(session_id, round_id, question, completed_members,
-                                 revision=revision_members or None)
-    if memory_enabled and synthesis:
-        memory_store.update_synthesis(session_id, round_id, {
-            "answer": synthesis.get("answer", ""),
-            "confidence": synthesis.get("confidence"),
-            "agreement": disagreement["agreement"],
-            "conflicts": disagreement["conflicts"],
-            "remaining_disagreements": synthesis.get("remaining_disagreements", []),
-        })
+        if memory_enabled and completed_members:
+            memory_store.store_round(session_id, round_id, question, completed_members,
+                                     revision=revision_members or None)
+        if memory_enabled and synthesis:
+            memory_store.update_synthesis(session_id, round_id, {
+                "answer": synthesis.get("answer", ""),
+                "confidence": synthesis.get("confidence"),
+                "agreement": disagreement["agreement"],
+                "conflicts": disagreement["conflicts"],
+                "remaining_disagreements": synthesis.get("remaining_disagreements", []),
+            })
 
-    return {
-        "question": question, "round_id": round_id,
-        "members": [members[name] for name in PROVIDER_LABELS],
-        "revision_members": revision_members,
-        "disagreement": disagreement,
-        "synthesis": synthesis,
-        "elapsed_ms": round((time.perf_counter() - started) * 1_000),
-        "memory": {"enabled": memory_enabled, "available": memory_store.available,
-                   "session_id": session_id if memory_enabled else ""},
-    }
+        return {
+            "question": question, "round_id": round_id,
+            "members": [members[name] for name in PROVIDER_LABELS],
+            "revision_members": revision_members,
+            "disagreement": disagreement,
+            "synthesis": synthesis,
+            "cancelled": cancelled,
+            "elapsed_ms": round((time.perf_counter() - started) * 1_000),
+            "memory": {"enabled": memory_enabled, "available": memory_store.available,
+                       "session_id": session_id if memory_enabled else ""},
+        }
+    finally:
+        finish_run(round_id)
 def make_transcript(question: str, submissions: list[Any]) -> tuple[str, list[dict[str, str]]]:
     if not isinstance(submissions, list):
         raise CouncilError("Council submissions must be a list.")

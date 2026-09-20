@@ -1,5 +1,7 @@
 import asyncio
 from fastapi import APIRouter
+
+from app.core.run_registy import cancel_run
 from app.models.schemas import AskPayload, SynthesizePayload, OllamaModelsPayload
 from app.services.council import   _memory_history_response
 from app.services.ollama import ollama_models
@@ -9,6 +11,10 @@ from app.core.config import  DEFAULT_OLLAMA_BASE_URL
 
 from app.core.memory import memory_store
 router = APIRouter()
+
+@router.post("/council/cancel/{round_id}")
+def cancel_council(round_id: str):
+    return {"ok": cancel_run(round_id)}
 
 @router.get("/health")
 async def health():
