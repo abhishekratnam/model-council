@@ -5,16 +5,18 @@ import urllib.parse
 from typing import Any
 from app.core.config import (
     MAX_PROMPT_CHARS, MAX_SYSTEM_PROMPT_CHARS, MAX_PROVIDER_OUTPUT_CHARS, MAX_SUBMISSION_CHARS,
-    MEMBER_INSTRUCTIONS,REVISION_INSTRUCTIONS, CHAIR_INSTRUCTIONS,CHAIR_FINAL_INSTRUCTIONS, PROVIDER_LABELS, DEFAULT_OLLAMA_BASE_URL
+    MEMBER_INSTRUCTIONS, REVISION_INSTRUCTIONS, CHAIR_INSTRUCTIONS, CHAIR_FINAL_INSTRUCTIONS,
+    PROVIDER_LABELS, DEFAULT_OLLAMA_BASE_URL,
 )
-from app.core.run_registy import register_run, finish_run
+from app.core.run_registry import register_run, finish_run
 from app.core.memory import memory_store
 from app.core.exceptions import CouncilError, ProviderError
 from app.core.memory import generate_round_id
 from app.services.validation import trim_text, bounded_int, bounded_float, truncate, validate_session_id
 from app.services.security import provider_config, provider_label, provider_model, provider_ready, is_loopback_host, clean_ollama_base_url, scrub_secrets
 from app.services.providers import call_provider, call_ollama_stream, ollama_relay_call
-import re, json
+import json
+import re
 def _call_member(provider, config, prompt, instructions, max_tokens, temperature,
                  emit=None, browser_rpc_queue=None, delta_event="member_delta"):
     """One model call. Browser-local Ollama goes through the RPC relay
@@ -109,10 +111,10 @@ def _run_revision_round(payload, completed, letters, conflicts, question,
     started = time.perf_counter()
     extra = f"\n\nExtra guidance:\n{payload.get('system_prompt')}" if payload.get("system_prompt") else ""
     jobs = {}
+    configs = {m["provider"]: provider_config(payload, m["provider"]) for m in completed}
 
     # Shells + events must exist before any revision_delta can fire.
-    revision_members = {m["provider"]: member_shell(m["provider"], provider_config(payload, m["provider"]))
-                        for m in completed}
+    revision_members = {provider: member_shell(provider, config) for provider, config in configs.items()}
     if emit:
         for member in revision_members.values():
             emit({"type": "revision_member", "member": member.copy()})
@@ -125,8 +127,7 @@ def _run_revision_round(payload, completed, letters, conflicts, question,
             body = (f"QUESTION: {question}\n\nYOUR PREVIOUS ANSWER:\n{m['text'][:1500]}\n\n"
                     f"OTHER MEMBERS' ANSWERS:\n{others}\n\n"
                     f"IDENTIFIED CONFLICTS:\n" + "\n".join(f"- {c}" for c in conflicts))
-            config = provider_config(payload, provider)
-            jobs[_submit_member(executor, provider, config, body, REVISION_INSTRUCTIONS + extra,
+            jobs[_submit_member(executor, provider, configs[provider], body, REVISION_INSTRUCTIONS + extra,
                                 max_tokens, temperature, emit, browser_rpc_queue, "revision_delta")] = provider
 
         for future in concurrent.futures.as_completed(jobs):
@@ -241,25 +242,31 @@ def run_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: qu
                 jobs[_submit_member(executor, provider, config, effective_question, instructions,
                                     max_tokens, temperature, emit, browser_rpc_queue)] = provider
 
-            for future in concurrent.futures.as_completed(jobs):
+            pending = set(jobs)
+            while pending:
+                # Poll instead of blocking on as_completed: the cancel flag must
+                # be noticed promptly, not only when the next member completes.
+                done, pending = concurrent.futures.wait(
+                    pending, timeout=0.5, return_when=concurrent.futures.FIRST_COMPLETED)
                 if cancel_event.is_set():
                     cancelled = True
                     break
-                provider = jobs[future]
-                member = members[provider]
-                elapsed_ms = round((time.perf_counter() - started) * 1_000)
-                try:
-                    text, usage = future.result()
-                    text, was_truncated = truncate(text, MAX_PROVIDER_OUTPUT_CHARS)
-                    member.update({"status": "complete", "text": text, "latency_ms": elapsed_ms,
-                                   "usage": usage, "truncated": was_truncated})
-                    memory_store.log_usage(provider, member.get("model", "unknown"),
-                                           _extract_total_tokens(provider, usage), elapsed_ms)
-                except ProviderError as error:
-                    member.update({"status": "error", "detail": scrub_secrets(str(error)), "latency_ms": elapsed_ms})
-                except Exception:
-                    member.update({"status": "error", "detail": "The provider could not complete this request.", "latency_ms": elapsed_ms})
-                emit({"type": "member_complete", "member": member.copy()})
+                for future in done:
+                    provider = jobs[future]
+                    member = members[provider]
+                    elapsed_ms = round((time.perf_counter() - started) * 1_000)
+                    try:
+                        text, usage = future.result()
+                        text, was_truncated = truncate(text, MAX_PROVIDER_OUTPUT_CHARS)
+                        member.update({"status": "complete", "text": text, "latency_ms": elapsed_ms,
+                                       "usage": usage, "truncated": was_truncated})
+                        memory_store.log_usage(provider, member.get("model", "unknown"),
+                                               _extract_total_tokens(provider, usage), elapsed_ms)
+                    except ProviderError as error:
+                        member.update({"status": "error", "detail": scrub_secrets(str(error)), "latency_ms": elapsed_ms})
+                    except Exception:
+                        member.update({"status": "error", "detail": "The provider could not complete this request.", "latency_ms": elapsed_ms})
+                    emit({"type": "member_complete", "member": member.copy()})
 
             completed_members = [m for m in members.values() if m.get("status") == "complete"]
         finally:
@@ -268,6 +275,8 @@ def run_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: qu
             executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
 
         if cancelled:
+            # Unblock an abandoned browser-relay thread so it stops draining chunks.
+            browser_rpc_queue.put({"rpc": "ollama_error", "error": "Council stopped by user."})
             emit({"type": "council_cancelled"})
             for member in members.values():
                 if member.get("status") == "pending":
@@ -354,10 +363,7 @@ def synthesize_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_qu
 
     session_id = validate_session_id(payload.get("session_id"))
     memory_enabled = payload.get("memory_enabled", True) is not False and bool(session_id)
-    if memory_enabled and memory_store.available:
-        context = memory_store.build_context(session_id)
-        if context:
-            transcript = f"{context}\n{transcript}"
+    transcript = _prepare_question_with_memory(transcript, session_id, memory_enabled)
 
     round_id = payload.get("round_id", "")
     if not isinstance(round_id, str):
@@ -402,7 +408,7 @@ def synthesize_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_qu
         "submission_count": len(selected),
         "memory": {"enabled": memory_enabled, "available": memory_store.available},
     }
-def _memory_history_response(session_id: str) -> dict[str, Any]:
+def memory_history_response(session_id: str) -> dict[str, Any]:
     rounds = memory_store.load_history(session_id)
     stats = memory_store.session_stats(session_id)
     return {

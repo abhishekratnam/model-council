@@ -58,7 +58,6 @@ class MemoryStore:
             members = r.get("members", [])
             for m in members:
                 if m.get("status") == "complete":
-                    print("Conversations", m)
                     context_parts.append(f"- {m.get('label')} answered: {m.get('text', '')[:500]}")
             
             synth = r.get("synthesis")
@@ -175,9 +174,6 @@ class MemoryStore:
             logger.error(f"Failed to delete round in Redis: {e}")
             return False
 
-    # Add these methods inside the MemoryStore class in app/core/memory.py
-
-
     def log_usage(self, provider: str, model: str, tokens: int, latency_ms: int) -> None:
         if not self.available:
             return
@@ -264,5 +260,3 @@ memory_store = MemoryStore(
     ttl_seconds=settings.MODEL_COUNCIL_MEMORY_TTL,
     max_rounds=settings.MODEL_COUNCIL_MEMORY_MAX_ROUNDS,
 )
-# Add this at the bottom of app/core/config.py
-

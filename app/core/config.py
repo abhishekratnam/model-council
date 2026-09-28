@@ -1,6 +1,4 @@
 import logging
-import os
-from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,16 +37,11 @@ logger = logging.getLogger("model_council")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-STATIC_DIR = BASE_DIR / "static"
-
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-MAX_REQUEST_BYTES = 200_000
 MAX_PROMPT_CHARS = 14_000
 MAX_SYSTEM_PROMPT_CHARS = 4_000
 MAX_PROVIDER_OUTPUT_CHARS = 40_000
 MAX_SUBMISSION_CHARS = 10_000
-REQUEST_TIMEOUT_SECONDS = 75
 OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS = 120
 # ── Council prompts ──────────────────────────────────────────────────
 
@@ -113,5 +106,3 @@ PRICING_PER_1K_TOKENS = {
     "ollama": 0.0,        # Local models are free
     "custom": 0.005,      # Default for Azure/custom endpoints
 }
-# ── Redis Memory (global singleton) ───────────────────────────────────────────
-

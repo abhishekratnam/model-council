@@ -1,12 +1,11 @@
-import os
 from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from app.core.memory import memory_store
-from app.core.config import logger, settings,  STATIC_DIR
+from app.core.config import logger, settings
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.security import is_safe_browser_origin, scrub_secrets, is_loopback_host
 from app.api.routes import router as api_router
@@ -67,22 +66,7 @@ app.include_router(ws_router, prefix="/api")
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
-
-# Use the centralized STATIC_DIR
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-
-@app.get("/")
-@app.get("/index.html")
-async def index():
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
-
-@app.get("/styles.css")
-async def styles():
-    return FileResponse(STATIC_DIR / "styles.css", media_type="text/css")
-
-@app.get("/app.js")
-async def app_js():
-    return FileResponse(STATIC_DIR / "app.js", media_type="text/javascript")
 
 # ── Entrypoint ──────────────────────────────────────────────────────────────
 

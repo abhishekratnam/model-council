@@ -8,7 +8,7 @@ from typing import Any
 from app.core.config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
-from app.services.extractors import extract_openai_text, extract_anthropic_text, extract_ollama_text, usage_fields
+from app.services.extractors import extract_openai_text, extract_anthropic_text, usage_fields
 from app.services.security import clean_ollama_base_url, provider_model, custom_string_map, custom_response_url, scrub_secrets
 
 def call_openai(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
@@ -72,25 +72,6 @@ def call_anthropic(config: dict[str, Any], question: str, instructions: str, max
     )
     return extract_anthropic_text(response), usage_fields(response, "anthropic")
 
-def call_ollama(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
-    base_url = clean_ollama_base_url(config.get("base_url"))
-    response = request_json(
-        "POST",
-        f"{base_url}/api/chat",
-        payload={
-            "model": provider_model(config),
-            "stream": False,
-            "think": False,
-            "messages": [
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": question},
-            ],
-            "options": {"temperature": temperature, "num_predict": max_tokens},
-            "keep_alive": "5m",
-        },
-    )
-    return extract_ollama_text(response), usage_fields(response, "ollama")
-
 def ollama_relay_call(
     config: dict[str, Any], 
     question: str, 
@@ -102,7 +83,6 @@ def ollama_relay_call(
     delta_event_type: str = "member_delta",
     provider: str = "ollama"
 ) -> tuple[str, dict[str, int]]:
-    print("FastAPI is sending RPC to browser to fetch Ollama...")
     emit({
         "type": "rpc_ollama_chat",
         "model": provider_model(config),
@@ -221,5 +201,7 @@ def call_provider(
     if provider == "anthropic":
         return call_anthropic(config, question, instructions, max_tokens, temperature)
     if provider == "ollama":
-        return call_ollama(config, question, instructions, max_tokens, temperature)
+        # Ollama has no non-streaming path left: aggregate the stream silently.
+        return call_ollama_stream(config, question, instructions, max_tokens, temperature,
+                                  lambda _delta: None)
     raise CouncilError("Unknown provider.")

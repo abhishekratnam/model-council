@@ -64,11 +64,12 @@ summary:focus-visible {
   outline-offset: 3px;
 }
 
+/* No filter: blur() here — the radial gradients already fade to transparent,
+   and blurring two huge fixed layers makes every repaint on the page expensive. */
 .ambient {
   position: fixed;
   z-index: 0;
   pointer-events: none;
-  filter: blur(20px);
   opacity: 0.5;
 }
 
@@ -158,16 +159,26 @@ summary:focus-visible {
 }
 
 .pulse {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 0 0 rgba(136, 205, 161, 0.55);
+}
+
+/* Transform/opacity only, so the animation stays on the compositor. */
+.pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(136, 205, 161, 0.55);
   animation: beacon 2.3s ease-out infinite;
 }
 
 @keyframes beacon {
-  75%, 100% { box-shadow: 0 0 0 6px rgba(136, 205, 161, 0); }
+  0% { transform: scale(1); opacity: 1; }
+  75%, 100% { transform: scale(2.8); opacity: 0; }
 }
 
 .hero {
@@ -265,7 +276,7 @@ h1 span {
   border-radius: var(--radius-lg);
   background: rgba(25, 24, 32, 0.72);
   box-shadow: 0 28px 74px rgba(0, 0, 0, 0.27), inset 0 1px rgba(255, 255, 255, 0.025);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(10px);
 }
 
 .setup-panel {
@@ -1399,7 +1410,7 @@ input[type="range"] {
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1466,6 +1477,11 @@ input[type="range"] {
 
 .danger-button:hover:not(:disabled) {
   background: rgba(229, 72, 77, 0.22);
+}
+
+/* Author display rules beat the UA's [hidden]; keep the stop button hidden on load. */
+.danger-button[hidden] {
+  display: none;
 }
 
 .danger-button:disabled {

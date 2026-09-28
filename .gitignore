@@ -21,7 +21,6 @@ dist/
 
 # Maven
 target/
-dist/
 
 # JetBrains IDE
 .idea/
@@ -48,11 +47,12 @@ Thumbs.db
 *.mov
 *.wmv
 
+# Virtual environments
 venv/
-env
+env/
+
+# Environment / secrets
 .env
-app/core/__pycache__/config.cpython-311.pyc
-.env
-app/__pycache__/*.pyc
-app/constants/__pycache__/*
+
+# Scripts
 /scripts

@@ -38,14 +38,6 @@ def extract_anthropic_text(response: dict[str, Any]) -> str:
         return "\n".join(chunks)
     raise ProviderError("Claude returned no text output.")
 
-def extract_ollama_text(response: dict[str, Any]) -> str:
-    message = response.get("message")
-    if isinstance(message, dict):
-        text = message.get("content")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-    raise ProviderError("Ollama returned no text output.")
-
 def usage_fields(response: dict[str, Any], provider: str) -> dict[str, int]:
     if provider in {"openai", "anthropic", "custom"}:
         usage = response.get("usage")

@@ -29,13 +29,32 @@
     finalText: $("#final-text"),
     copyFinal: $("#copy-final"),
     toast: $("#toast"),
+    openaiModel: $("#openai-model"),
+    openaiKey: $("#openai-key"),
+    anthropicModel: $("#anthropic-model"),
+    anthropicKey: $("#anthropic-key"),
     ollamaRefresh: $("#refresh-ollama"),
     ollamaStatus: $("#ollama-status"),
+    ollamaModel: $("#ollama-model"),
+    ollamaBaseUrl: $("#ollama-base-url"),
     ollamaOptions: $("#ollama-model-options"),
     customMode: $("#custom-mode"),
     customStatus: $("#custom-status"),
     customJson: $("#custom-json"),
     applyCustomJson: $("#apply-custom-json"),
+    customLabel: $("#custom-label"),
+    customModel: $("#custom-model"),
+    customEndpoint: $("#custom-endpoint"),
+    customAuthType: $("#custom-auth-type"),
+    customKey: $("#custom-key"),
+    customApiVersion: $("#custom-api-version"),
+    customEnabled: $("#custom-enabled"),
+    enabledInputs: {
+      openai: $("#openai-enabled"),
+      custom: $("#custom-enabled"),
+      anthropic: $("#anthropic-enabled"),
+      ollama: $("#ollama-enabled"),
+    },
     // Memory elements
     memoryEnabled: $("#memory-enabled"),
     memoryBadge: $("#memory-badge"),
@@ -56,6 +75,11 @@
   const providers = ["openai", "custom", "anthropic", "ollama"];
   const providerLabels = { openai: "OpenAI", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama" };
 
+  // Streaming deltas re-render the whole accumulated answer (O(text length)
+  // each time), so coalesce them to at most one markdown render per interval.
+  const RENDER_INTERVAL_MS = 150;
+  const OLLAMA_LIST_CACHE_MS = 5_000;
+
   const state = {
     members: [],
     question: "",
@@ -69,8 +93,12 @@
     customQueryParams: {},
     memberViews: new Map(),
     pendingMemberProviders: new Set(),
-    memberRenderFrame: null,
-    finalRenderFrame: null,
+    memberRenderTimer: null,
+    lastMemberRender: 0,
+    finalRenderTimer: null,
+    lastFinalRender: 0,
+    ollamaListCache: null,
+    ollamaRpcController: null,
     // Memory state
     sessionId: getSessionId(),
     currentRoundId: "",
@@ -134,6 +162,15 @@
     }
   }
 
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
   function renderMemoryHistory(rounds) {
     if (!elements.memoryHistory) return;
     if (!rounds.length) {
@@ -143,13 +180,14 @@
     elements.memoryHistory.innerHTML = rounds
       .map((r) => {
         const synth = r.synthesis
-          ? `<div class="memory-synthesis"><strong>${r.synthesis.label}</strong>: ${r.synthesis.answer.slice(0, 150)}${r.synthesis.answer.length > 150 ? "…" : ""}</div>`
+          ? `<div class="memory-synthesis"><strong>${escapeHtml(r.synthesis.label)}</strong>: ${escapeHtml(r.synthesis.answer.slice(0, 150))}${r.synthesis.answer.length > 150 ? "…" : ""}</div>`
           : '<div class="muted" style="margin-top: 0.5rem;">No synthesis yet</div>';
         const ts = new Date(r.timestamp * 1000).toLocaleString();
+        const question = r.question;
         return `<details class="memory-round">
-          <summary>${ts} — ${r.question.slice(0, 60)}${r.question.length > 60 ? "…" : ""}</summary>
+          <summary>${ts} — ${escapeHtml(question.slice(0, 60))}${question.length > 60 ? "…" : ""}</summary>
           <div class="memory-round-body">
-            <div class="memory-question">${r.question}</div>
+            <div class="memory-question">${escapeHtml(question)}</div>
             ${synth}
           </div>
         </details>`;
@@ -212,10 +250,8 @@
     }
     return body;
   }
-    // Add this new function to handle Ollama fetches
   async function handleOllamaRpc(socket, message) {
-    console.log("✅ Received RPC from FastAPI. Browser is now fetching Ollama directly...");
-    const base_url = $("#ollama-base-url").value.trim() || "http://127.0.0.1:11434";
+    const base_url = elements.ollamaBaseUrl.value.trim() || "http://127.0.0.1:11434";
     const payload = {
       model: message.model,
       stream: true,
@@ -226,6 +262,7 @@
     };
 
     const controller = new AbortController();
+    state.ollamaRpcController = controller;
     socket.addEventListener("close", () => controller.abort());
 
     try {
@@ -278,6 +315,8 @@
         rpc: "ollama_error",
         error: "Cannot reach local Ollama from browser. Is it running? (Check OLLAMA_ORIGINS)"
       }));
+    } finally {
+      if (state.ollamaRpcController === controller) state.ollamaRpcController = null;
     }
   }
     function streamRequest(payload, onEvent) {
@@ -313,7 +352,6 @@
         }
         if (!message || typeof message.type !== "string") return;
 
-        // --- NEW: Intercept RPC requests from the server ---
         if (message.type === "rpc_ollama_chat") {
           handleOllamaRpc(socket, message);
           return;
@@ -343,7 +381,8 @@
   }
 
   function isEnabled(provider) {
-    return $(`#${provider}-enabled`).checked;
+    const input = elements.enabledInputs[provider];
+    return Boolean(input && input.checked);
   }
 
   function buildProviderSettings() {
@@ -354,33 +393,33 @@
     const customMode = elements.customMode.value;
     const queryParams = { ...state.customQueryParams };
     if (customMode === "azure") {
-      const apiVersion = $("#custom-api-version").value.trim();
+      const apiVersion = elements.customApiVersion.value.trim();
       if (apiVersion) queryParams["api-version"] = apiVersion;
     }
     return {
       openai: {
         enabled: openaiEnabled,
-        model: $("#openai-model").value.trim(),
-        api_key: openaiEnabled ? $("#openai-key").value : "",
+        model: elements.openaiModel.value.trim(),
+        api_key: openaiEnabled ? elements.openaiKey.value : "",
       },
       anthropic: {
         enabled: anthropicEnabled,
-        model: $("#anthropic-model").value.trim(),
-        api_key: anthropicEnabled ? $("#anthropic-key").value : "",
+        model: elements.anthropicModel.value.trim(),
+        api_key: anthropicEnabled ? elements.anthropicKey.value : "",
       },
       ollama: {
         enabled: ollamaEnabled,
-        model: $("#ollama-model").value.trim(),
-        base_url: $("#ollama-base-url").value.trim(),
+        model: elements.ollamaModel.value.trim(),
+        base_url: elements.ollamaBaseUrl.value.trim(),
       },
       custom: {
         enabled: customEnabled,
         mode: customMode,
-        label: $("#custom-label").value.trim(),
-        model: $("#custom-model").value.trim(),
-        endpoint: $("#custom-endpoint").value.trim(),
-        auth_type: $("#custom-auth-type").value,
-        api_key: customEnabled ? $("#custom-key").value : "",
+        label: elements.customLabel.value.trim(),
+        model: elements.customModel.value.trim(),
+        endpoint: elements.customEndpoint.value.trim(),
+        auth_type: elements.customAuthType.value,
+        api_key: customEnabled ? elements.customKey.value : "",
         headers: { ...state.customHeaders },
         query_params: queryParams,
       },
@@ -430,15 +469,15 @@
     }
 
     if (typeof config.mode === "string") elements.customMode.value = config.mode;
-    if (typeof config.label === "string") $("#custom-label").value = config.label;
-    if (typeof config.model === "string") $("#custom-model").value = config.model;
-    if (typeof config.endpoint === "string") $("#custom-endpoint").value = config.endpoint;
-    if (typeof config.auth_type === "string") $("#custom-auth-type").value = config.auth_type;
-    if (typeof config.api_key === "string") $("#custom-key").value = config.api_key;
+    if (typeof config.label === "string") elements.customLabel.value = config.label;
+    if (typeof config.model === "string") elements.customModel.value = config.model;
+    if (typeof config.endpoint === "string") elements.customEndpoint.value = config.endpoint;
+    if (typeof config.auth_type === "string") elements.customAuthType.value = config.auth_type;
+    if (typeof config.api_key === "string") elements.customKey.value = config.api_key;
     if (config.query_params && typeof config.query_params["api-version"] !== "undefined") {
-      $("#custom-api-version").value = String(config.query_params["api-version"]);
+      elements.customApiVersion.value = String(config.query_params["api-version"]);
     }
-    $("#custom-enabled").checked = true;
+    elements.customEnabled.checked = true;
     syncProviderCard("custom");
     syncCustomMode();
     showToast("Custom provider configuration applied for this tab only.");
@@ -446,8 +485,8 @@
 
   function syncCustomMode() {
     const isAzure = elements.customMode.value === "azure";
-    $("#custom-api-version").disabled = !isAzure || !isEnabled("custom");
-    $("#custom-api-version").closest("div").classList.toggle("is-visually-muted", !isAzure);
+    elements.customApiVersion.disabled = !isAzure || !isEnabled("custom");
+    elements.customApiVersion.closest("div").classList.toggle("is-visually-muted", !isAzure);
     elements.customStatus.textContent = isAzure
       ? "Azure calls use your deployment name and the Responses API. Keys remain request-scoped."
       : "Use the provider's complete OpenAI-compatible /responses URL. Add gateway headers through JSON if needed.";
@@ -538,7 +577,7 @@
       if (member.truncated) parts.push("output limited for display");
       return parts.join(" · ") || "Response received";
     }
-    if (member.status === "cancelled") return "Stopped mid-answer — partial text kept.";  
+    if (member.status === "cancelled") return member.text ? "Stopped mid-answer — partial answer kept." : "Stopped before this member finished.";
     if (member.status === "pending") return member.text ? "Streaming response…" : "This member is considering the question…";
     return "";
   }
@@ -734,11 +773,13 @@
       view.expand.disabled = false;
     } else if (member.status === "cancelled") {
       renderMarkdown(view.answer, member.text || "");
-      view.detail.textContent = "Stopped by user before this member finished.";
+      view.detail.textContent = member.text
+        ? "Stopped by user — partial answer kept below."
+        : "Stopped by user before this member finished.";
       view.includeControl.classList.add("is-hidden");
       view.include.disabled = true;
-      view.copy.disabled = true;
-      view.expand.disabled = true;
+      view.copy.disabled = !member.text;
+      view.expand.disabled = !member.text;
     } else if (member.status === "pending") {
       renderMarkdown(view.answer, member.text || "");
       view.detail.textContent = member.text ? "Receiving a streamed response…" : "Waiting for the local server to collect the council's responses.";
@@ -756,26 +797,34 @@
     }
   }
 
-  function scheduleMemberPatch(provider) {
-    state.pendingMemberProviders.add(provider);
-    if (state.memberRenderFrame !== null) return;
-    state.memberRenderFrame = window.requestAnimationFrame(() => {
-      const pending = [...state.pendingMemberProviders];
-      state.pendingMemberProviders.clear();
-      state.memberRenderFrame = null;
-      pending.forEach((name) => {
-        const member = state.members.find((item) => item.provider === name);
-        if (member) patchMember(member);
-      });
+  function flushMemberPatches() {
+    const pending = [...state.pendingMemberProviders];
+    state.pendingMemberProviders.clear();
+    state.memberRenderTimer = null;
+    state.lastMemberRender = performance.now();
+    pending.forEach((name) => {
+      const member = state.members.find((item) => item.provider === name);
+      if (member) patchMember(member);
     });
   }
 
+  function scheduleMemberPatch(provider) {
+    state.pendingMemberProviders.add(provider);
+    if (state.memberRenderTimer !== null) return;
+    const wait = Math.max(0, RENDER_INTERVAL_MS - (performance.now() - state.lastMemberRender));
+    state.memberRenderTimer = window.setTimeout(flushMemberPatches, wait);
+  }
+
+  function flushFinalRender() {
+    state.finalRenderTimer = null;
+    state.lastFinalRender = performance.now();
+    renderMarkdown(elements.finalText, state.finalAnswer);
+  }
+
   function scheduleFinalRender() {
-    if (state.finalRenderFrame !== null) return;
-    state.finalRenderFrame = window.requestAnimationFrame(() => {
-      state.finalRenderFrame = null;
-      renderMarkdown(elements.finalText, state.finalAnswer);
-    });
+    if (state.finalRenderTimer !== null) return;
+    const wait = Math.max(0, RENDER_INTERVAL_MS - (performance.now() - state.lastFinalRender));
+    state.finalRenderTimer = window.setTimeout(flushFinalRender, wait);
   }
 
   function updateSynthesisControls(resetChair = false) {
@@ -842,6 +891,10 @@
           state.currentRoundId = event.round_id || "";
         } else if (event.type === "council_cancelled") {
           state.councilStopped = true;
+          if (state.ollamaRpcController) {
+            state.ollamaRpcController.abort();   // stop pulling chunks from local Ollama
+            state.ollamaRpcController = null;
+          }
           state.members.forEach((member) => {
             if (member.status === "pending") member.status = "cancelled";
           });
@@ -863,7 +916,21 @@
         }
       });
 
+      const streamedBeforeStop = new Map(
+        state.members.filter((m) => m.text).map((m) => [m.provider, m]),
+      );
       state.members = Array.isArray(data.members) ? data.members : [];
+      if (data.cancelled) {
+        // The server keeps no text for stopped members; restore what the
+        // browser streamed so "partial results kept" is actually true.
+        state.members.forEach((member) => {
+          const local = streamedBeforeStop.get(member.provider);
+          if (local && !member.text) {
+            member.text = local.text;
+            if (member.status !== "complete" && member.status !== "error") member.status = "cancelled";
+          }
+        });
+      }
       state.members.forEach((member) => {
         if (member.status === "complete") member.included = true;
       });
@@ -876,7 +943,7 @@
       updateSynthesisControls(true);
       loadMemoryHistory();
 
-      if (!state.members.some((member) => member.status === "complete")) {
+      if (!state.members.some((member) => member.status === "complete") && !data.cancelled) {
         showToast("No council member completed this round. Check each card for the reason.", "error");
       }
     } catch (error) {
@@ -943,19 +1010,22 @@
     }
   }
 
-    async function refreshOllama() {
+  async function refreshOllama() {
     if (elements.ollamaRefresh.disabled) return;
     elements.ollamaRefresh.disabled = true;
     elements.ollamaRefresh.textContent = "Checking…";
     elements.ollamaStatus.textContent = "Checking local Ollama…";
     elements.ollamaStatus.className = "connection-note";
-    
-    const base_url = $("#ollama-base-url").value.trim();
+
+    const base_url = elements.ollamaBaseUrl.value.trim();
     const isLocal = base_url.includes("127.0.0.1") || base_url.includes("localhost");
 
     try {
       let data;
-      if (isLocal) {
+      const cached = state.ollamaListCache;
+      if (cached && cached.base_url === base_url && performance.now() - cached.at < OLLAMA_LIST_CACHE_MS) {
+        data = cached.data;
+      } else if (isLocal) {
         // Bypass FastAPI and fetch directly from the browser!
         const res = await fetch(`${base_url}/api/tags`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -965,22 +1035,24 @@
         // Use FastAPI for remote URLs (like Ngrok)
         data = await request("/api/ollama/models", { base_url: base_url });
       }
+      state.ollamaListCache = { base_url, at: performance.now(), data };
 
-      elements.ollamaOptions.replaceChildren();
       const models = Array.isArray(data.models) ? data.models : [];
       const installedModelNames = new Set();
+      const options = document.createDocumentFragment();
       for (const model of models) {
         if (!model || typeof model.name !== "string") continue;
         installedModelNames.add(model.name);
         const option = document.createElement("option");
         option.value = model.name;
-        elements.ollamaOptions.append(option);
+        options.append(option);
       }
-      if (!$("#ollama-model").value && models[0] && models[0].name) {
-        $("#ollama-model").value = models[0].name;
+      elements.ollamaOptions.replaceChildren(options);
+      if (!elements.ollamaModel.value && models[0] && models[0].name) {
+        elements.ollamaModel.value = models[0].name;
       }
       const count = models.length;
-      const selectedModel = $("#ollama-model").value.trim();
+      const selectedModel = elements.ollamaModel.value.trim();
       const gemma4Installed = [...installedModelNames].some((name) => name === "gemma4" || name.startsWith("gemma4:"));
       if (gemma4Installed) {
         elements.ollamaStatus.textContent = `Gemma 4 is available · ${count} local ${count === 1 ? "model" : "models"} found`;
@@ -1031,14 +1103,14 @@
       navigator.sendBeacon(`/api/council/cancel/${encodeURIComponent(state.currentRoundId)}`);
     }
     if (state.streamSocket) state.streamSocket.close();
-    if (state.memberRenderFrame !== null) window.cancelAnimationFrame(state.memberRenderFrame);
-    if (state.finalRenderFrame !== null) window.cancelAnimationFrame(state.finalRenderFrame);
-    state.memberRenderFrame = null;
-    state.finalRenderFrame = null;
+    if (state.memberRenderTimer !== null) window.clearTimeout(state.memberRenderTimer);
+    if (state.finalRenderTimer !== null) window.clearTimeout(state.finalRenderTimer);
+    state.memberRenderTimer = null;
+    state.finalRenderTimer = null;
     state.pendingMemberProviders.clear();
-    $("#openai-key").value = "";
-    $("#anthropic-key").value = "";
-    $("#custom-key").value = "";
+    elements.openaiKey.value = "";
+    elements.anthropicKey.value = "";
+    elements.customKey.value = "";
     elements.customJson.value = "";
     state.customHeaders = {};
     state.customQueryParams = {};
@@ -1075,7 +1147,7 @@
 
   function wireEvents() {
     providers.forEach((provider) => {
-      $(`#${provider}-enabled`).addEventListener("change", () => syncProviderCard(provider));
+      elements.enabledInputs[provider].addEventListener("change", () => syncProviderCard(provider));
       syncProviderCard(provider);
     });
     elements.customMode.addEventListener("change", syncCustomMode);
