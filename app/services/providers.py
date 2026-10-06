@@ -122,26 +122,8 @@ def ollama_relay_call(
         raise ProviderError("Ollama returned no text output.")
     return text, final_usage
 
-def call_ollama_stream(
-    config: dict[str, Any],
-    question: str,
-    instructions: str,
-    max_tokens: int,
-    temperature: float,
-    on_delta: Any,
-) -> tuple[str, dict[str, int]]:
-    base_url = clean_ollama_base_url(config.get("base_url"))
-    payload = {
-        "model": provider_model(config),
-        "stream": True,
-        "think": False,
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": question},
-        ],
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-        "keep_alive": "5m",
-    }
+def _stream_ollama_chat(base_url: str, payload: dict[str, Any], on_delta: Any) -> tuple[str, dict[str, int]]:
+    """POST /api/chat with NDJSON streaming; shared by single-turn and agent calls."""
     request = urllib.request.Request(
         f"{base_url}/api/chat",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -185,6 +167,53 @@ def call_ollama_stream(
     if not text:
         raise ProviderError("Ollama returned no text output.")
     return text, usage_fields(final_response or {}, "ollama")
+
+def call_ollama_stream(
+    config: dict[str, Any],
+    question: str,
+    instructions: str,
+    max_tokens: int,
+    temperature: float,
+    on_delta: Any,
+) -> tuple[str, dict[str, int]]:
+    base_url = clean_ollama_base_url(config.get("base_url"))
+    payload = {
+        "model": provider_model(config),
+        "stream": True,
+        "think": False,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": question},
+        ],
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+        "keep_alive": "5m",
+    }
+    return _stream_ollama_chat(base_url, payload, on_delta)
+
+def call_ollama_messages(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    on_delta: Any,
+    *,
+    num_ctx: int,
+    format_json: bool = True,
+) -> tuple[str, dict[str, int]]:
+    """Multi-turn agent call. JSON output mode + an explicit context window —
+    Ollama's default num_ctx silently truncates file contents otherwise."""
+    base_url = clean_ollama_base_url(config.get("base_url"))
+    payload: dict[str, Any] = {
+        "model": provider_model(config),
+        "stream": True,
+        "think": False,
+        "messages": messages,
+        "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": num_ctx},
+        "keep_alive": "15m",
+    }
+    if format_json:
+        payload["format"] = "json"
+    return _stream_ollama_chat(base_url, payload, on_delta)
 
 def call_provider(
     provider: str,

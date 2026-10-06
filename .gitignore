@@ -56,3 +56,6 @@ env/
 
 # Scripts
 /scripts
+
+# Code agent default workspace
+workspace/

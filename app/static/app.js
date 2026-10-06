@@ -70,6 +70,32 @@
     modalText: $("#modal-text"),
     modalClose: $("#modal-close"),
     modalCopy: $("#modal-copy"),
+    // Workspace / code agent elements
+    modeCouncil: $("#mode-council"),
+    modeWorkspace: $("#mode-workspace"),
+    councilMode: $("#council-mode"),
+    workspaceMode: $("#workspace-mode"),
+    workspaceRootSelect: $("#workspace-root-select"),
+    loadTree: $("#load-tree"),
+    workspaceSearch: $("#workspace-search"),
+    runSearch: $("#run-search"),
+    workspaceTree: $("#workspace-tree"),
+    fileViewer: $("#file-viewer"),
+    fileViewerPath: $("#file-viewer-path"),
+    fileViewerMeta: $("#file-viewer-meta"),
+    fileViewerCode: $("#file-viewer-code"),
+    codeTask: $("#code-task"),
+    agentMaxSteps: $("#agent-max-steps"),
+    runAgent: $("#run-agent"),
+    cancelAgent: $("#cancel-agent"),
+    agentActivity: $("#agent-activity"),
+    agentRunTitle: $("#agent-run-title"),
+    agentStatus: $("#agent-status"),
+    agentStream: $("#agent-stream"),
+    agentStreamText: $("#agent-stream-text"),
+    agentFeed: $("#agent-feed"),
+    agentSummaryCard: $("#agent-summary-card"),
+    agentSummaryText: $("#agent-summary-text"),
   };
 
   const providers = ["openai", "custom", "anthropic", "ollama"];
@@ -102,6 +128,13 @@
     // Memory state
     sessionId: getSessionId(),
     currentRoundId: "",
+    // Workspace / code agent state
+    agentRunning: false,
+    agentStopped: false,
+    agentRoundId: "",
+    agentStepRows: new Map(),
+    pendingDiffCard: null,
+    workspaceRoot: "",
   };
 
   // ── Memory & Session Helpers ──────────────────────────────────────────────
@@ -363,7 +396,8 @@
           return;
         }
         onEvent(message);
-        if (message.type === "round_complete" || message.type === "synthesis_complete") {
+        if (message.type === "round_complete" || message.type === "synthesis_complete" ||
+            (message.type === "agent_complete" && message.result)) {
           completed = true;
           if (!settled) {
             settled = true;
@@ -554,6 +588,9 @@
   window.addEventListener("pagehide", () => {
     if (state.asking && state.currentRoundId) {
       navigator.sendBeacon(`/api/council/cancel/${encodeURIComponent(state.currentRoundId)}`);
+    }
+    if (state.agentRunning && state.agentRoundId) {
+      navigator.sendBeacon(`/api/council/cancel/${encodeURIComponent(state.agentRoundId)}`);
     }
   });
 
@@ -1131,6 +1168,493 @@
     showToast("Keys, prompt, and council results cleared from this page.");
   }
 
+  // ── Workspace / Code Agent ────────────────────────────────────────────────
+
+  function switchMode(mode) {
+    const isWorkspace = mode === "workspace";
+    elements.councilMode.hidden = isWorkspace;
+    elements.workspaceMode.hidden = !isWorkspace;
+    elements.modeCouncil.classList.toggle("is-active", !isWorkspace);
+    elements.modeWorkspace.classList.toggle("is-active", isWorkspace);
+    elements.modeCouncil.setAttribute("aria-selected", String(!isWorkspace));
+    elements.modeWorkspace.setAttribute("aria-selected", String(isWorkspace));
+    if (isWorkspace) loadWorkspaceRoots();
+  }
+
+  function shortenPath(path) {
+    const segments = String(path).split("/").filter(Boolean);
+    return segments.length > 2 ? `…/${segments.slice(-2).join("/")}` : path;
+  }
+
+  async function loadWorkspaceRoots() {
+    try {
+      const resp = await fetch("/api/workspace/roots", { cache: "no-store", credentials: "same-origin" });
+      const data = await resp.json();
+      const roots = Array.isArray(data.roots) ? data.roots : [];
+      elements.workspaceRootSelect.replaceChildren();
+      if (!roots.length) {
+        state.workspaceRoot = "";
+        elements.workspaceRootSelect.disabled = true;
+        const option = document.createElement("option");
+        option.textContent = data.error || "No workspace configured";
+        elements.workspaceRootSelect.append(option);
+        return;
+      }
+      elements.workspaceRootSelect.disabled = false;
+      for (const entry of roots) {
+        const option = document.createElement("option");
+        option.value = entry.path;
+        option.textContent = shortenPath(entry.path) + (entry.exists ? "" : " (missing)");
+        elements.workspaceRootSelect.append(option);
+      }
+      if (!roots.some((entry) => entry.path === state.workspaceRoot)) {
+        state.workspaceRoot = roots[0].path;
+      }
+      elements.workspaceRootSelect.value = state.workspaceRoot;
+      elements.workspaceRootSelect.title = state.workspaceRoot;
+    } catch (_) {
+      state.workspaceRoot = "";
+      elements.workspaceRootSelect.disabled = true;
+      elements.workspaceRootSelect.replaceChildren();
+      const option = document.createElement("option");
+      option.textContent = "Workspace unavailable";
+      elements.workspaceRootSelect.append(option);
+    }
+  }
+
+  function onRootChange() {
+    state.workspaceRoot = elements.workspaceRootSelect.value;
+    elements.workspaceRootSelect.title = state.workspaceRoot;
+    elements.workspaceTree.replaceChildren();
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No file tree loaded yet.";
+    elements.workspaceTree.append(empty);
+    elements.fileViewer.hidden = true;
+  }
+
+  async function loadTree() {
+    if (elements.loadTree.disabled) return;
+    elements.loadTree.disabled = true;
+    elements.loadTree.textContent = "Loading…";
+    try {
+      const data = await request("/api/workspace/tree", { root: state.workspaceRoot });
+      renderTree(data);
+    } catch (error) {
+      showToast(error.message || "Could not load the file tree.", "error");
+    } finally {
+      elements.loadTree.disabled = false;
+      elements.loadTree.textContent = "Load file tree";
+    }
+  }
+
+  function buildTreeModel(entries) {
+    const root = { name: "", dirs: new Map(), files: [] };
+    for (const entry of entries) {
+      const parts = entry.path.split("/");
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const key = parts[i];
+        if (!node.dirs.has(key)) node.dirs.set(key, { name: key, dirs: new Map(), files: [] });
+        node = node.dirs.get(key);
+      }
+      const name = parts[parts.length - 1];
+      if (entry.type === "dir") {
+        if (!node.dirs.has(name)) node.dirs.set(name, { name, dirs: new Map(), files: [] });
+      } else {
+        node.files.push({ name, path: entry.path, size: entry.size || 0 });
+      }
+    }
+    return root;
+  }
+
+  function renderTreeNode(node, depth) {
+    const wrap = document.createElement("div");
+    const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
+    for (const dir of dirs) {
+      const details = document.createElement("details");
+      details.className = "tree-dir";
+      if (depth < 1) details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${dir.name}/`;
+      details.append(summary);
+      details.append(renderTreeNode(dir, depth + 1));
+      wrap.append(details);
+    }
+    for (const file of files) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tree-file";
+      button.textContent = file.name;
+      button.title = `${file.path} · ${file.size.toLocaleString()} bytes`;
+      button.addEventListener("click", () => openWorkspaceFile(file.path));
+      wrap.append(button);
+    }
+    return wrap;
+  }
+
+  function renderTree(data) {
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (!entries.length) {
+      elements.workspaceTree.replaceChildren();
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "The workspace folder is empty.";
+      elements.workspaceTree.append(empty);
+      return;
+    }
+    const container = document.createElement("div");
+    container.className = "tree-body";
+    container.append(renderTreeNode(buildTreeModel(entries), 0));
+    if (data.truncated) {
+      const note = document.createElement("p");
+      note.className = "tree-note";
+      note.textContent = "Tree truncated — narrow with a subfolder search or raise the entry cap.";
+      container.append(note);
+    }
+    elements.workspaceTree.replaceChildren(container);
+  }
+
+  async function openWorkspaceFile(path, offset) {
+    try {
+      const blob = await request("/api/workspace/read", { path, offset: offset || 1, root: state.workspaceRoot });
+      renderFileViewer(blob);
+    } catch (error) {
+      showToast(error.message || "Could not open the file.", "error");
+    }
+  }
+
+  function renderFileViewer(blob) {
+    elements.fileViewer.hidden = false;
+    elements.fileViewerPath.textContent = blob.path;
+    elements.fileViewerMeta.textContent =
+      `lines ${blob.start_line}–${blob.end_line} of ${blob.total_lines}` +
+      (blob.truncated ? " · truncated" : "");
+    const lines = blob.content.split("\n");
+    const gutterWidth = String(blob.end_line).length;
+    elements.fileViewerCode.textContent = lines
+      .map((line, i) => `${String(blob.start_line + i).padStart(gutterWidth, " ")} │ ${line}`)
+      .join("\n");
+  }
+
+  async function runWorkspaceSearch() {
+    const query = elements.workspaceSearch.value.trim();
+    if (!query) return;
+    try {
+      const data = await request("/api/workspace/search", { query, root: state.workspaceRoot });
+      const container = document.createElement("div");
+      container.className = "tree-body";
+      const heading = document.createElement("p");
+      heading.className = "tree-note";
+      heading.textContent = `${data.matches.length} match${data.matches.length === 1 ? "" : "es"} for “${query}”` +
+        (data.truncated ? " (truncated)" : "");
+      container.append(heading);
+      for (const match of data.matches) {
+        const hit = document.createElement("button");
+        hit.type = "button";
+        hit.className = "search-hit";
+        const place = document.createElement("span");
+        place.className = "search-hit-path";
+        place.textContent = `${match.path}:${match.line}`;
+        const text = document.createElement("span");
+        text.className = "search-hit-text";
+        text.textContent = match.text;
+        hit.append(place, text);
+        hit.addEventListener("click", () => openWorkspaceFile(match.path, Math.max(1, match.line - 8)));
+        container.append(hit);
+      }
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "quiet-button";
+      back.textContent = "← Back to file tree";
+      back.addEventListener("click", loadTree);
+      container.append(back);
+      elements.workspaceTree.replaceChildren(container);
+      elements.fileViewer.hidden = true;
+    } catch (error) {
+      showToast(error.message || "Search failed.", "error");
+    }
+  }
+
+  function setAgentStatus(status, text) {
+    elements.agentStatus.className = `result-status status-${status}`;
+    elements.agentStatus.textContent = text;
+  }
+
+  function setAgentBusy(busy) {
+    state.agentRunning = busy;
+    elements.runAgent.disabled = busy;
+    elements.runAgent.classList.toggle("is-loading", busy);
+    elements.runAgent.querySelector(".button-label").textContent = busy ? "Agent working" : "Run coder agent";
+    elements.cancelAgent.hidden = !busy;
+    elements.cancelAgent.disabled = false;
+    const labelEl = elements.cancelAgent.querySelector(".button-label");
+    if (labelEl) labelEl.textContent = "Stop agent";
+    if (!busy) state.agentStopped = false;
+  }
+
+  function upsertAgentStep(event) {
+    const key = String(event.index);
+    let row = state.agentStepRows.get(key);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "agent-step";
+      const index = document.createElement("span");
+      index.className = "step-index";
+      index.textContent = key;
+      const body = document.createElement("div");
+      body.className = "step-body";
+      const top = document.createElement("div");
+      top.className = "step-top";
+      const label = document.createElement("span");
+      label.className = "step-label";
+      const chip = document.createElement("span");
+      chip.className = "result-status";
+      top.append(label, chip);
+      const detail = document.createElement("p");
+      detail.className = "step-detail";
+      body.append(top, detail);
+      row.append(index, body);
+      state.agentStepRows.set(key, row);
+      elements.agentFeed.append(row);
+    }
+    row.classList.remove("is-running", "is-complete", "is-error", "is-rejected");
+    row.classList.add(`is-${event.status}`);
+    row.querySelector(".step-label").textContent = event.label || event.action || "Step";
+    const chip = row.querySelector(".result-status");
+    chip.className = `result-status status-${event.status === "running" ? "pending" : event.status}`;
+    chip.textContent = { running: "Working", complete: "Done", error: "Failed", rejected: "Rejected" }[event.status] || event.status;
+    row.querySelector(".step-detail").textContent = event.detail || "";
+    row.scrollIntoView({ block: "nearest" });
+  }
+
+  function appendDiffCard(event) {
+    const card = document.createElement("div");
+    card.className = "agent-diff-card is-pending";
+    const head = document.createElement("div");
+    head.className = "agent-diff-head";
+    const path = document.createElement("strong");
+    path.textContent = event.path;
+    const kind = document.createElement("span");
+    kind.className = "diff-kind";
+    kind.textContent = event.is_new ? "new file" : event.action === "edit_file" ? "edit" : "rewrite";
+    head.append(path, kind);
+    const body = document.createElement("pre");
+    body.className = "diff-body";
+    for (const line of String(event.diff || "(no textual changes)").split("\n")) {
+      const span = document.createElement("span");
+      const isAdd = line.startsWith("+") && !line.startsWith("+++");
+      const isDel = line.startsWith("-") && !line.startsWith("---");
+      span.className = `diff-line ${isAdd ? "add" : isDel ? "del" : line.startsWith("@@") ? "hunk" : ""}`;
+      span.textContent = line.length ? line : " ";
+      body.append(span, document.createTextNode("\n"));
+    }
+    card.append(head, body);
+    elements.agentFeed.append(card);
+    state.pendingDiffCard = card;
+    card.scrollIntoView({ block: "nearest" });
+  }
+
+  function attachConfirm(event) {
+    const { confirm_id: confirmId, kind } = event;
+    let card;
+    if (kind === "write" && state.pendingDiffCard) {
+      card = state.pendingDiffCard;
+      state.pendingDiffCard = null;
+    } else {
+      card = document.createElement("div");
+      card.className = "agent-diff-card is-pending";
+      const head = document.createElement("div");
+      head.className = "agent-diff-head";
+      const strong = document.createElement("strong");
+      strong.textContent = "Command";
+      const command = document.createElement("code");
+      command.textContent = Array.isArray(event.command) ? event.command.join(" ") : "";
+      head.append(strong, command);
+      card.append(head);
+      elements.agentFeed.append(card);
+    }
+    card.dataset.confirmId = confirmId;
+    const row = document.createElement("div");
+    row.className = "confirm-row";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "confirm-approve";
+    approve.textContent = kind === "command" ? "Approve & run" : "Approve & apply";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "confirm-reject";
+    reject.textContent = "Reject";
+    const note = document.createElement("span");
+    note.className = "confirm-note";
+    note.textContent = "Waiting for your decision…";
+    approve.addEventListener("click", () => answerConfirm(confirmId, true, card));
+    reject.addEventListener("click", () => answerConfirm(confirmId, false, card));
+    row.append(approve, reject, note);
+    card.append(row);
+    card.scrollIntoView({ block: "nearest" });
+  }
+
+  function answerConfirm(confirmId, approved, card) {
+    if (state.streamSocket && state.streamSocket.readyState === WebSocket.OPEN) {
+      state.streamSocket.send(JSON.stringify({ rpc: "agent_confirm", confirm_id: confirmId, approved }));
+    }
+    markConfirm(card, approved);
+  }
+
+  function markConfirm(card, approved, noteText) {
+    if (!card) return;
+    card.classList.remove("is-pending");
+    card.classList.add(approved ? "is-approved" : "is-rejected");
+    const approve = card.querySelector(".confirm-approve");
+    const reject = card.querySelector(".confirm-reject");
+    if (approve) approve.disabled = true;
+    if (reject) reject.disabled = true;
+    const note = card.querySelector(".confirm-note");
+    if (note) note.textContent = noteText || (approved ? "Approved" : "Rejected");
+  }
+
+  function closeOpenConfirms() {
+    elements.agentFeed.querySelectorAll(".agent-diff-card.is-pending").forEach((card) => {
+      markConfirm(card, false, "Closed");
+    });
+    state.pendingDiffCard = null;
+  }
+
+  function appendTerminal(event) {
+    const wrap = document.createElement("div");
+    wrap.className = `agent-terminal ${event.returncode === 0 ? "is-ok" : "is-fail"}`;
+    const head = document.createElement("div");
+    head.className = "terminal-head";
+    const command = document.createElement("code");
+    command.textContent = `$ ${(event.command || []).join(" ")}`;
+    const exit = document.createElement("span");
+    exit.className = "terminal-exit";
+    exit.textContent = `exit ${event.returncode} · ${formatDuration(event.duration_ms)}`;
+    head.append(command, exit);
+    const pre = document.createElement("pre");
+    pre.className = "terminal-body";
+    pre.textContent = [event.stdout, event.stderr].filter(Boolean).join("\n") || "(no output)";
+    wrap.append(head, pre);
+    elements.agentFeed.append(wrap);
+    wrap.scrollIntoView({ block: "nearest" });
+  }
+
+  async function runAgent() {
+    if (state.agentRunning) return;
+    const task = elements.codeTask.value.trim();
+    if (!task) {
+      showToast("Describe the coding task first.", "error");
+      elements.codeTask.focus();
+      return;
+    }
+    if (!state.workspaceRoot) {
+      await loadWorkspaceRoots();
+      if (!state.workspaceRoot) {
+        showToast("No workspace folder. Set MODEL_COUNCIL_WORKSPACE_ROOT or create the default workspace/ folder.", "error");
+        return;
+      }
+    }
+    const providerSettings = buildProviderSettings();
+    if (!providerSettings.ollama.enabled || !providerSettings.ollama.model) {
+      showToast("Enable Ollama and choose a local model (e.g. qwen3-coder:30b).", "error");
+      return;
+    }
+
+    state.agentStopped = false;
+    state.agentStepRows = new Map();
+    state.pendingDiffCard = null;
+    elements.agentFeed.replaceChildren();
+    elements.agentSummaryCard.hidden = true;
+    elements.agentStreamText.replaceChildren();
+    elements.agentStream.open = false;
+    elements.agentActivity.hidden = false;
+    elements.agentRunTitle.textContent = "Agent run";
+    setAgentStatus("pending", "Working");
+    setAgentBusy(true);
+    try {
+      const data = await streamRequest({
+        action: "code_task",
+        task,
+        root: state.workspaceRoot,
+        max_steps: Number(elements.agentMaxSteps.value),
+        providers: { ollama: providerSettings.ollama },
+      }, (event) => {
+        if (event.type === "agent_start") {
+          state.agentRoundId = event.round_id || "";
+          state.workspaceRoot = event.root || state.workspaceRoot;
+          if (elements.workspaceRootSelect.value !== state.workspaceRoot) {
+            elements.workspaceRootSelect.value = state.workspaceRoot;
+          }
+          elements.workspaceRootSelect.title = state.workspaceRoot;
+          elements.agentRunTitle.textContent = `Agent · ${event.model || "local model"}`;
+        } else if (event.type === "agent_delta") {
+          if (!state.agentStopped) elements.agentStreamText.append(document.createTextNode(event.delta || ""));
+        } else if (event.type === "agent_step") {
+          upsertAgentStep(event);
+        } else if (event.type === "agent_diff") {
+          appendDiffCard(event);
+        } else if (event.type === "agent_confirm") {
+          attachConfirm(event);
+        } else if (event.type === "agent_confirm_done") {
+          const card = elements.agentFeed.querySelector(`[data-confirm-id="${event.confirm_id}"]`);
+          markConfirm(card, event.approved);
+        } else if (event.type === "agent_output") {
+          appendTerminal(event);
+        } else if (event.type === "agent_cancelled") {
+          state.agentStopped = true;
+          setAgentStatus("cancelled", "Stopped");
+          showToast("Stopping the code agent — approved changes are kept.");
+        }
+      });
+      finishAgentRun(data);
+    } catch (error) {
+      setAgentStatus("error", "Failed");
+      elements.agentSummaryCard.hidden = false;
+      renderMarkdown(elements.agentSummaryText, error.message || "The code agent could not be started.");
+      showToast(error.message || "The code agent could not be started.", "error");
+    } finally {
+      setAgentBusy(false);
+      closeOpenConfirms();
+    }
+  }
+
+  function finishAgentRun(data) {
+    const status = data.cancelled ? "cancelled" : data.ok ? "complete" : "error";
+    setAgentStatus(status, data.cancelled ? "Stopped" : data.ok ? "Completed" : "Ended");
+    const meta = [];
+    if (Array.isArray(data.steps)) meta.push(`${data.steps.length} step${data.steps.length === 1 ? "" : "s"}`);
+    if (Array.isArray(data.applied_changes) && data.applied_changes.length) {
+      meta.push(`applied: ${data.applied_changes.join(", ")}`);
+    }
+    if (data.usage && Number.isFinite(data.usage.eval_count)) {
+      meta.push(`${data.usage.eval_count.toLocaleString()} output tokens`);
+    }
+    if (Number.isFinite(data.elapsed_ms)) meta.push(formatDuration(data.elapsed_ms));
+    elements.agentSummaryCard.hidden = false;
+    const body = [data.summary || "The agent ended without a summary.", meta.join(" · ")]
+      .filter(Boolean)
+      .join("\n\n");
+    renderMarkdown(elements.agentSummaryText, body);
+    if (Array.isArray(data.applied_changes) && data.applied_changes.length) loadTree();
+  }
+
+  async function cancelAgent() {
+    if (!state.agentRunning || !state.agentRoundId) return;
+    elements.cancelAgent.disabled = true;
+    const labelEl = elements.cancelAgent.querySelector(".button-label");
+    if (labelEl) labelEl.textContent = "Stopping…";
+    try {
+      await fetch(`/api/council/cancel/${encodeURIComponent(state.agentRoundId)}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    } catch (_) {
+      /* the stream still delivers agent_cancelled even if this fails */
+    }
+  }
+
   // ── Modal Logic ───────────────────────────────────────────────────────────
 
   function openModal(title, model, text, kicker) {
@@ -1180,6 +1704,18 @@
     elements.clear.addEventListener("click", clearSession);
     elements.ollamaRefresh.addEventListener("click", refreshOllama);
 
+    // Workspace / code agent listeners
+    elements.modeCouncil.addEventListener("click", () => switchMode("council"));
+    elements.modeWorkspace.addEventListener("click", () => switchMode("workspace"));
+    elements.workspaceRootSelect.addEventListener("change", onRootChange);
+    elements.loadTree.addEventListener("click", loadTree);
+    elements.runSearch.addEventListener("click", runWorkspaceSearch);
+    elements.workspaceSearch.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runWorkspaceSearch();
+    });
+    elements.runAgent.addEventListener("click", runAgent);
+    elements.cancelAgent.addEventListener("click", cancelAgent);
+
     // Memory event listeners
     if (elements.newSessionBtn) elements.newSessionBtn.addEventListener("click", newSession);
     if (elements.clearMemoryBtn) elements.clearMemoryBtn.addEventListener("click", clearMemory);
@@ -1208,4 +1744,5 @@
   wireEvents();
   updateQuestionCount();
   loadMemoryHistory();
+  loadWorkspaceRoots();
 })();

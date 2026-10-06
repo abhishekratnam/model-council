@@ -11,9 +11,19 @@ services:
       - MODEL_COUNCIL_ALLOW_NETWORK=1
       # Points to the redis service below
       - MODEL_COUNCIL_REDIS_URL=redis://host.docker.internal:6379/0
+      # The CODE AGENT calls Ollama from inside the container, where 127.0.0.1
+      # is the container itself, not your Mac. Keep the UI's Ollama "Local
+      # server" field at http://host.docker.internal:11434 (macOS/Windows
+      # Docker Desktop) and keep this flag enabled:
+      - MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
       # Optional: Set your allowed browser origins here
       # - MODEL_COUNCIL_ALLOWED_ORIGINS=http://localhost:8787
+      # Workspace mode root (defaults to /app/workspace). To work on a folder
+      # outside this repo, mount it and point this variable at the mount:
+      # - MODEL_COUNCIL_WORKSPACE_ROOT=/workspace
     volumes:
       - .:/app
       # Map local static folder for easy frontend updates without rebuilding
+      # To let the code agent work on an external codebase, mount it, e.g.:
+      # - /absolute/path/to/your/codebase:/workspace
   

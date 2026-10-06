@@ -6,6 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.services.council import run_council_stream, synthesize_council_stream
+from app.services.code_agent import run_code_agent
 from app.services.security import is_safe_browser_origin, scrub_secrets
 from app.core.exceptions import CouncilError, ProviderError
 
@@ -68,6 +69,9 @@ async def council_stream(websocket: WebSocket):
         elif action == "synthesize":
             result = await asyncio.to_thread(synthesize_council_stream, body, emit, browser_rpc_queue)
             await _safe_ws_send(websocket, {"type": "synthesis_complete", "result": result})
+        elif action == "code_task":
+            result = await asyncio.to_thread(run_code_agent, body, emit, browser_rpc_queue)
+            await _safe_ws_send(websocket, {"type": "agent_complete", "result": result})
         else:
             raise CouncilError("Unknown streaming action.")
 

@@ -268,6 +268,12 @@
         </aside>
 
         <section class="deliberation-panel">
+          <div class="mode-tabs" role="tablist" aria-label="Workspace mode">
+            <button id="mode-council" class="mode-tab is-active" type="button" role="tab" aria-selected="true">Council debate</button>
+            <button id="mode-workspace" class="mode-tab" type="button" role="tab" aria-selected="false">Workspace · code agent</button>
+          </div>
+
+          <div id="council-mode">
           <div class="panel-heading prompt-heading">
             <div>
               <p class="eyebrow">02 / QUESTION</p>
@@ -367,6 +373,102 @@
               </article>
             </section>
           </section>
+          </div><!-- /council-mode -->
+
+          <div id="workspace-mode" hidden>
+            <div class="panel-heading prompt-heading">
+              <div>
+                <p class="eyebrow">02 / WORKSPACE</p>
+                <h2>On-device code agent</h2>
+              </div>
+              <div class="root-picker">
+                <label class="root-picker-label" for="workspace-root-select">Root</label>
+                <select id="workspace-root-select" class="root-select" title="Sandboxed workspace root"></select>
+              </div>
+            </div>
+            <p class="workspace-disclosure">
+              A local Ollama model explores the sandboxed folder below and writes code. Every
+              file change and every command waits for your explicit approval, and
+              <strong>Stop</strong> halts the run at the next step boundary.
+            </p>
+
+            <div class="workspace-grid">
+              <div class="workspace-files">
+                <div class="workspace-files-bar">
+                  <button id="load-tree" class="quiet-button" type="button">Load file tree</button>
+                  <input
+                    id="workspace-search"
+                    class="field-input field-input-small"
+                    placeholder="Search the codebase…"
+                    maxlength="300"
+                    autocapitalize="off"
+                    spellcheck="false"
+                  />
+                  <button id="run-search" class="quiet-button" type="button">Find</button>
+                </div>
+                <div id="workspace-tree" class="workspace-tree" aria-label="File tree">
+                  <p class="muted">No file tree loaded yet.</p>
+                </div>
+                <div id="file-viewer" class="file-viewer" hidden>
+                  <div class="file-viewer-head">
+                    <span id="file-viewer-path" class="file-viewer-path"></span>
+                    <span id="file-viewer-meta" class="file-viewer-meta"></span>
+                  </div>
+                  <pre id="file-viewer-code" class="file-viewer-code" tabindex="0"></pre>
+                </div>
+              </div>
+
+              <div class="workspace-task">
+                <label class="field-label" for="code-task">Task for the coder agent</label>
+                <textarea
+                  id="code-task"
+                  rows="4"
+                  maxlength="14000"
+                  placeholder="e.g. Add a workspace stats endpoint that returns file count and total lines, with a pytest test."
+                ></textarea>
+                <div class="workspace-task-meta">
+                  <label class="agent-steps-label" for="agent-max-steps">Max steps
+                    <select id="agent-max-steps" class="field-input">
+                      <option value="10">10</option>
+                      <option value="20" selected>20</option>
+                      <option value="30">30</option>
+                      <option value="40">40</option>
+                    </select>
+                  </label>
+                  <span class="muted">Uses your local Ollama model — pick one in the members panel (e.g. <code>qwen3-coder:30b</code>).</span>
+                </div>
+                <div class="action-row">
+                  <button id="cancel-agent" class="danger-button" type="button" hidden>
+                    <span class="stop-icon" aria-hidden="true"></span>
+                    <span class="button-label">Stop agent</span>
+                  </button>
+                  <button id="run-agent" class="primary-button" type="button">
+                    <span class="button-label">Run coder agent</span>
+                    <span class="button-arrow" aria-hidden="true">→</span>
+                  </button>
+                </div>
+
+                <section id="agent-activity" class="agent-activity" aria-live="polite" hidden>
+                  <div class="agent-activity-head">
+                    <div>
+                      <p class="eyebrow">03 / AGENT RUN</p>
+                      <h3 id="agent-run-title">Agent run</h3>
+                    </div>
+                    <span id="agent-status" class="result-status status-pending">Working</span>
+                  </div>
+                  <details id="agent-stream" class="agent-stream">
+                    <summary>Raw model output <span>▾</span></summary>
+                    <pre id="agent-stream-text" class="agent-stream-text"></pre>
+                  </details>
+                  <div id="agent-feed" class="agent-feed"></div>
+                  <div id="agent-summary-card" class="final-answer agent-summary" hidden>
+                    <span class="final-kicker">AGENT RESULT</span>
+                    <div id="agent-summary-text" class="answer-text"></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div><!-- /workspace-mode -->
         </section>
       </section>
     </main>

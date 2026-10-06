@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     MODEL_COUNCIL_REDIS_URL: str = "redis://127.0.0.1:6379/0"
     MODEL_COUNCIL_MEMORY_TTL: int = 86400
     MODEL_COUNCIL_MEMORY_MAX_ROUNDS: int = 8
-    
+
+    # Workspace (code agent). Empty = "<repo>/workspace" (created on demand).
+    MODEL_COUNCIL_WORKSPACE_ROOT: str = ""
+
     # Logging
     LOG_LEVEL: str = "INFO"
 
@@ -43,6 +46,22 @@ MAX_SYSTEM_PROMPT_CHARS = 4_000
 MAX_PROVIDER_OUTPUT_CHARS = 40_000
 MAX_SUBMISSION_CHARS = 10_000
 OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS = 120
+
+# ── Workspace / code-agent constants ─────────────────────────────────────────
+WORKSPACE_MAX_TREE_ENTRIES = 400
+WORKSPACE_MAX_TREE_DEPTH = 8
+WORKSPACE_MAX_FILE_BYTES = 120_000
+WORKSPACE_MAX_READ_LINES = 1_200
+WORKSPACE_SEARCH_MAX_RESULTS = 40
+WORKSPACE_COMMAND_TIMEOUT_SECONDS = 60
+WORKSPACE_COMMAND_OUTPUT_CHARS = 4_000
+
+CODE_AGENT_DEFAULT_MAX_STEPS = 20
+CODE_AGENT_MAX_STEPS_LIMIT = 40
+CODE_AGENT_CONFIRM_TIMEOUT_SECONDS = 300
+CODE_AGENT_TOOL_RESULT_CHARS = 6_000
+CODE_AGENT_HISTORY_CHAR_BUDGET = 48_000
+CODE_AGENT_NUM_CTX = 16_384
 # ── Council prompts ──────────────────────────────────────────────────
 
 MEMBER_INSTRUCTIONS = """You are one member of a model council. Give an independent,
@@ -98,6 +117,33 @@ PROVIDER_LABELS = {
     "ollama": "Ollama",
     "custom": "Azure / custom",
 }
+
+# ── Code agent prompt ────────────────────────────────────────────────────────
+
+CODE_AGENT_INSTRUCTIONS = """You are the coder agent of Model Council, working inside a
+sandboxed Python codebase folder on the user's machine. You solve the task step by step
+by issuing exactly ONE JSON action per turn. Focus on Python code; keep changes minimal,
+idiomatic, and consistent with the file's existing style.
+
+Available actions — respond with ONLY a JSON object, no markdown, no commentary:
+{"action": "list_tree"}                                            — show the folder structure
+{"action": "search", "query": "...", "is_regex": false}            — find code (max 40 matches)
+{"action": "read_file", "path": "app/services/x.py", "offset": 1, "limit": 400}  — offset/limit optional
+{"action": "write_file", "path": "...", "content": "full new file content"}      — staged as a diff, needs user confirmation
+{"action": "edit_file", "path": "...", "find": "exact existing text", "replace": "new text"}  — find must match exactly once; staged, needs confirmation
+{"action": "run_command", "command": ["python", "-m", "pytest", "-q"]}           — allowlisted commands only; needs confirmation
+{"action": "done", "summary": "what you changed and how you verified it"}
+{"action": "fail", "summary": "why you could not complete the task"}
+
+Rules:
+- Explore before editing: list_tree / search / read_file first. Re-read a file after
+  external changes; never assume its contents.
+- Prefer edit_file with a small exact "find" snippet over rewriting whole files.
+- Always verify Python changes by running the project's tests or the changed module
+  (e.g. ["python", "-m", "pytest", "-q"]).
+- Paths are relative to the workspace root and may not start with "." or contain "..".
+- If the user rejects a confirmation, do not retry the same edit; adjust or stop.
+- One action per reply. Never wrap JSON in prose or code fences."""
 
 # Estimated cost per 1,000 tokens (blended input/output rates in USD)
 PRICING_PER_1K_TOKENS = {

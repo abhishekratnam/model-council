@@ -127,7 +127,10 @@ For example, the application can also use:
 MODEL_COUNCIL_MEMORY_TTL=86400
 MODEL_COUNCIL_MEMORY_MAX_ROUNDS=8
 MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
+MODEL_COUNCIL_WORKSPACE_ROOT=/absolute/path/to/any/codebase,/absolute/path/to/another/repo
 ```
+
+`MODEL_COUNCIL_WORKSPACE_ROOT` points Workspace mode (Section 9) at one or more codebase folders — separate several paths with commas. Each configured folder appears in the Workspace tab's **Root** picker, so switching codebases needs no restart. When the variable is empty, the code agent uses the `workspace/` folder inside this repository (created on demand). Browsers cannot browse your disk, so the picker only offers these server-configured roots and the server rejects anything outside the list.
 
 Keep provider API keys out of source control. Add `.env` to `.gitignore` if it is not already there. The browser-supplied provider keys should remain request-scoped and should not be committed to the repository.
 
@@ -226,7 +229,38 @@ For Azure or a compatible Responses API endpoint, configure the provider through
 
 Ollama responses and Ollama-led synthesis stream through the application's WebSocket connection.
 
-## 9. Health check
+## 9. Workspace mode (on-device code agent)
+
+Workspace mode turns Model Council into a local coding agent: a local Ollama model (built and
+tested with `qwen3-coder:30b`, Python-focused) explores a codebase folder, writes code, and runs
+commands — all from the browser UI.
+
+1. Open the **Workspace · code agent** tab next to *Council debate*.
+2. Pick a local Ollama model in the members panel (e.g. `qwen3-coder:30b`).
+3. Browse the sandboxed file tree or search the code; click any file to read it with line numbers.
+4. Describe the task (e.g. "Add a `remove_item` function to `shop/cart.py` with a test, then run pytest") and press **Run coder agent**.
+5. The agent streams one JSON action per step (`list_tree`, `search`, `read_file`, `write_file`, `edit_file`, `run_command`, `done`, `fail`). Every proposed change appears as a unified diff and every command as a terminal card — **nothing is written or executed until you approve it**. **Stop** halts the run at the next step boundary.
+
+### How it stays safe
+
+- **Path jail**: every path is resolved inside the workspace root; dotfiles (`.git`, `.env`), symlink escapes, binary files, and files over 120 KB are refused.
+- **Staged diffs**: `write_file`/`edit_file` only stage a diff. The server applies it after you click **Approve**, and `edit_file` re-validates at apply time.
+- **Command allowlist**: only `python`, `python3`, `pytest`, `ruff`, `pip` argv lists (no shell), with destructive tokens and shell operators rejected, a 60 s timeout, and truncated output.
+- **Bounded runs**: default 20 steps (max 40), per-step model timeout, 5-minute confirmation timeout, and a context-window trimmer that keeps the conversation inside the local model's `num_ctx`.
+- Commands run with the server's environment, so tools like `pytest` must be installed in the Python environment that runs the server.
+
+### Running Workspace mode in Docker
+
+Two things change when the app runs in a container:
+
+1. **Ollama is on the host, but `127.0.0.1` inside the container is the container itself.** The code agent calls Ollama from the server process, so a `Connection refused [Errno 111]` on `127.0.0.1:11434` means the container is calling itself. Set the Ollama "Local server" field in the UI to `http://host.docker.internal:11434` (macOS/Windows Docker Desktop) and enable `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1` for the container — `docker-compose.yml` already ships with it enabled.
+2. **The workspace folder must be mounted into the container** and commands run *inside* the container. Set `MODEL_COUNCIL_WORKSPACE_ROOT=/workspace` and mount your codebase at `/workspace` (see the commented volume in `docker-compose.yml`); `pytest`/`python` must exist in the image's environment.
+
+For the smoothest Workspace-mode experience, run the app host-native (`uv run` / `.venv`) — Ollama, your codebase, and your Python tools are then all in the same environment.
+
+Feasibility note: `qwen3-coder:30b` (MoE, ~3B active parameters, Q4_K_M ≈ 17 GB) runs comfortably on a 24 GB Apple-Silicon Mac when the context window is kept at ~16k tokens; `qwen3-coder:next`-class 80B models need ≥32 GB.
+
+## 10. Health check
 
 Once the server is running, verify the API:
 
@@ -234,7 +268,7 @@ Once the server is running, verify the API:
 curl http://localhost:8787/api/health
 ```
 
-## 10. Run tests
+## 11. Run tests
 
 Run the test suite with:
 
@@ -244,7 +278,7 @@ uv run python -m unittest discover -s tests -v
 
 The tests should use mocks and should not require real OpenAI, Anthropic, or Ollama credentials.
 
-## 11. Docker Compose
+## 12. Docker Compose
 
 `docker-compose.yml` can be used when you want the application itself containerized.
 
@@ -274,7 +308,7 @@ If Redis is another container on the same Docker network, use the Redis service 
 redis://redis:6379/0
 ```
 
-## 12. Security notes
+## 13. Security notes
 
 The application is designed primarily as a local-first application.
 
