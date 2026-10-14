@@ -2,6 +2,7 @@ import json
 import ssl
 import socket
 import queue
+import urllib.parse
 import urllib.error
 import urllib.request
 from typing import Any
@@ -9,7 +10,7 @@ from app.core.config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
 from app.services.extractors import extract_openai_text, extract_anthropic_text, usage_fields
-from app.services.security import clean_ollama_base_url, provider_model, custom_string_map, custom_response_url, scrub_secrets
+from app.services.security import clean_ollama_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
 
 def call_openai(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     model = provider_model(config)
@@ -28,6 +29,38 @@ def call_openai(config: dict[str, Any], question: str, instructions: str, max_to
         },
     )
     return extract_openai_text(response), usage_fields(response, "openai")
+
+def call_openrouter(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
+    response = request_json(
+        "POST",
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {str(config.get('api_key', '')).strip()}"},
+        payload={
+            "model": provider_model(config),
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": question},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+    )
+    choices = response.get("choices")
+    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        text = "\n".join(
+            block["text"].strip()
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()
+        )
+    else:
+        text = ""
+    if not text:
+        raise ProviderError("OpenRouter returned no text output.")
+    return text, usage_fields(response, "openrouter")
 
 def call_custom(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     headers = custom_string_map(config.get("headers"), field="Custom headers")
@@ -83,16 +116,38 @@ def ollama_relay_call(
     delta_event_type: str = "member_delta",
     provider: str = "ollama"
 ) -> tuple[str, dict[str, int]]:
-    emit({
+    return ollama_relay_messages(
+        config,
+        [{"role": "system", "content": instructions}, {"role": "user", "content": question}],
+        {"temperature": temperature, "num_predict": max_tokens},
+        emit,
+        browser_rpc_queue,
+        delta_event_type,
+        provider,
+    )
+
+def ollama_relay_messages(
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    options: dict[str, Any],
+    emit: Any,
+    browser_rpc_queue: queue.Queue,
+    delta_event_type: str = "agent_delta",
+    provider: str = "ollama",
+    *,
+    keep_alive: str = "5m",
+    format_json: bool = False,
+) -> tuple[str, dict[str, int]]:
+    rpc = {
         "type": "rpc_ollama_chat",
         "model": provider_model(config),
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": question}
-        ],
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-        "keep_alive": "5m"
-    })
+        "messages": messages,
+        "options": options,
+        "keep_alive": keep_alive,
+    }
+    if format_json:
+        rpc["format"] = "json"
+    emit(rpc)
     
     chunks: list[str] = []
     final_usage: dict[str, int] = {}
@@ -199,6 +254,9 @@ def call_ollama_messages(
     *,
     num_ctx: int,
     format_json: bool = True,
+    emit: Any = None,
+    browser_rpc_queue: queue.Queue | None = None,
+    delta_event_type: str = "agent_delta",
 ) -> tuple[str, dict[str, int]]:
     """Multi-turn agent call. JSON output mode + an explicit context window —
     Ollama's default num_ctx silently truncates file contents otherwise."""
@@ -213,7 +271,126 @@ def call_ollama_messages(
     }
     if format_json:
         payload["format"] = "json"
+    if emit is not None and browser_rpc_queue is not None:
+        hostname = urllib.parse.urlsplit(base_url).hostname
+        if is_loopback_host(hostname):
+            return ollama_relay_messages(
+                config,
+                messages,
+                payload["options"],
+                emit,
+                browser_rpc_queue,
+                delta_event_type,
+                keep_alive=payload["keep_alive"],
+                format_json=format_json,
+            )
     return _stream_ollama_chat(base_url, payload, on_delta)
+
+def call_agent_messages(
+    provider: str,
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    on_delta: Any,
+    *,
+    num_ctx: int,
+    emit: Any = None,
+    browser_rpc_queue: queue.Queue | None = None,
+    delta_event_type: str = "agent_delta",
+) -> tuple[str, dict[str, int]]:
+    """Run one complete agent turn with its selected provider."""
+    if provider == "ollama":
+        return call_ollama_messages(
+            config, messages, max_tokens, temperature, on_delta,
+            num_ctx=num_ctx, emit=emit, browser_rpc_queue=browser_rpc_queue,
+            delta_event_type=delta_event_type,
+        )
+
+    if provider in {"openai", "custom"}:
+        if provider == "openai":
+            url = "https://api.openai.com/v1/responses"
+            headers = {"Authorization": f"Bearer {str(config.get('api_key', '')).strip()}"}
+        else:
+            headers = custom_string_map(config.get("headers"), field="Custom headers")
+            auth_type = config.get("auth_type", "bearer")
+            api_key = str(config.get("api_key", "")).strip()
+            if auth_type == "bearer":
+                headers["Authorization"] = f"Bearer {api_key}"
+            elif auth_type == "api-key":
+                headers["api-key"] = api_key
+            url = custom_response_url(config)
+        response = request_json(
+            "POST", url, headers=headers,
+            payload={
+                "model": provider_model(config),
+                "input": messages,
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+                "store": False,
+            },
+        )
+        text = extract_openai_text(response)
+        usage = usage_fields(response, provider)
+    elif provider == "openrouter":
+        response = request_json(
+            "POST",
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {str(config.get('api_key', '')).strip()}"},
+            payload={
+                "model": provider_model(config),
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+        )
+        choices = response.get("choices")
+        message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            text = "\n".join(
+                block["text"].strip()
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()
+            )
+        else:
+            text = ""
+        usage = usage_fields(response, provider)
+        if not text:
+            raise ProviderError("OpenRouter returned no text output.")
+    elif provider == "anthropic":
+        system_text = "\n\n".join(
+            message["content"] for message in messages
+            if message.get("role") in {"system", "developer"}
+        )
+        conversation = [
+            {"role": message["role"], "content": message["content"]}
+            for message in messages if message.get("role") in {"user", "assistant"}
+        ]
+        response = request_json(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": str(config.get("api_key", "")).strip(),
+                "anthropic-version": "2023-06-01",
+            },
+            payload={
+                "model": provider_model(config),
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "system": system_text,
+                "messages": conversation,
+            },
+        )
+        text = extract_anthropic_text(response)
+        usage = usage_fields(response, provider)
+    else:
+        raise CouncilError("Unsupported coding agent provider.")
+
+    on_delta(text)
+    return text, usage
 
 def call_provider(
     provider: str,
@@ -225,6 +402,8 @@ def call_provider(
 ) -> tuple[str, dict[str, int]]:
     if provider == "openai":
         return call_openai(config, question, instructions, max_tokens, temperature)
+    if provider == "openrouter":
+        return call_openrouter(config, question, instructions, max_tokens, temperature)
     if provider == "custom":
         return call_custom(config, question, instructions, max_tokens, temperature)
     if provider == "anthropic":

@@ -8,8 +8,14 @@ performed after the UI confirms a staged diff.
 import difflib
 import os
 import re
+import signal
+import socket
 import subprocess
+import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,6 +28,9 @@ from app.core.config import (
     WORKSPACE_SEARCH_MAX_RESULTS,
     WORKSPACE_COMMAND_TIMEOUT_SECONDS,
     WORKSPACE_COMMAND_OUTPUT_CHARS,
+    WORKSPACE_SERVER_START_TIMEOUT_SECONDS,
+    CODE_AGENT_SESSION_LOG_PATH,
+    CODE_AGENT_SESSION_LOG_MAX_CHARS,
 )
 from app.core.exceptions import CouncilError
 
@@ -39,7 +48,11 @@ BINARY_SUFFIXES = {
     ".sqlite3", ".pyc", ".pyo", ".DS_Store",
 }
 
-ALLOWED_COMMAND_EXECUTABLES = {"python", "python3", "pytest", "ruff", "pip"}
+ALLOWED_COMMAND_EXECUTABLES = {
+    "python", "python3", "pytest", "ruff", "pip", "uv",
+    "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
+    "go", "cargo", "ruby", "php",
+}
 FORBIDDEN_COMMAND_TOKENS = {"sudo", "rm", "shutdown", "reboot", "kill", "mkfs", "dd"}
 
 
@@ -100,6 +113,48 @@ def workspace_root() -> Path:
     return resolve_root(None)
 
 
+def read_agent_session_log(root: str | None = None) -> str:
+    """Return the bounded, application-managed handoff from the prior agent run."""
+    root_path = resolve_root(root)
+    path = root_path / CODE_AGENT_SESSION_LOG_PATH
+    if any(part.is_symlink() for part in (
+        root_path / ".model_council",
+        root_path / ".model_council/plans",
+        path,
+    )):
+        return ""
+    if not path.is_file() or not _is_text_file(path):
+        return ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(CODE_AGENT_SESSION_LOG_MAX_CHARS)
+    except OSError:
+        return ""
+
+
+def write_agent_session_log(content: str, root: str | None = None) -> dict[str, Any]:
+    """Replace the handoff file with a bounded record of the completed agent run."""
+    if not isinstance(content, str):
+        raise CouncilError("Agent session log must be text.")
+    root_path = resolve_root(root)
+    state_dir = root_path / ".model_council"
+    plans_dir = state_dir / "plans"
+    path = root_path / CODE_AGENT_SESSION_LOG_PATH
+    if any(part.is_symlink() for part in (state_dir, plans_dir, path)):
+        raise CouncilError(f"Agent session log path contains a symlink: {CODE_AGENT_SESSION_LOG_PATH}")
+    if (state_dir.exists() and not state_dir.is_dir()) or (plans_dir.exists() and not plans_dir.is_dir()):
+        raise CouncilError(f"Agent session log directory is unavailable: {CODE_AGENT_SESSION_LOG_PATH}")
+    if path.exists() and not path.is_file():
+        raise CouncilError(f"Agent session log target is not a file: {CODE_AGENT_SESSION_LOG_PATH}")
+    bounded = content[:CODE_AGENT_SESSION_LOG_MAX_CHARS]
+    try:
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(bounded, encoding="utf-8")
+    except OSError as error:
+        raise CouncilError(f"Could not write the agent session log: {error}") from error
+    return {"path": CODE_AGENT_SESSION_LOG_PATH, "written": True}
+
+
 def resolve_in_workspace(relative_path: str, root: Path) -> Path:
     """Map a model/user-supplied relative path to a safe absolute path."""
     if not isinstance(relative_path, str):
@@ -154,6 +209,8 @@ def list_tree(relative_path: str = "", root: str | None = None) -> dict[str, Any
             if len(entries) >= WORKSPACE_MAX_TREE_ENTRIES:
                 truncated = True
                 break
+            if child.name.startswith(".") and child.name != ".github":
+                continue
             if _is_ignored_dir(child.name):
                 continue
             rel = child.relative_to(root_path).as_posix()
@@ -239,6 +296,8 @@ def search_workspace(query: str, is_regex: bool = False, root: str | None = None
             if len(matches) >= WORKSPACE_SEARCH_MAX_RESULTS:
                 truncated = True
                 break
+            if name.startswith("."):
+                continue
             path = Path(current) / name
             if path.suffix.lower() in BINARY_SUFFIXES or not _is_text_file(path):
                 continue
@@ -380,10 +439,112 @@ def validate_command(command: Any) -> list[str]:
     return argv
 
 
-def run_command(command: Any, root: str | None = None) -> dict[str, Any]:
-    """Run an allowlisted argv in the workspace root with a timeout."""
+def _local_probe_url(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > 500:
+        raise CouncilError("probe_url must be a local HTTP URL containing {host} and {port}.")
+    if "{port}" not in value:
+        raise CouncilError("probe_url must include the {port} placeholder for an independent server check.")
+    template = value.replace("{host}", "127.0.0.1").replace("{port}", "49152")
+    parsed = urllib.parse.urlsplit(template)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise CouncilError("probe_url must target localhost or 127.0.0.1.")
+    try:
+        parsed.port
+    except ValueError as error:
+        raise CouncilError("probe_url has an invalid port.") from error
+    return value
+
+
+def _server_responds(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=0.5):
+            return True
+    except urllib.error.HTTPError:
+        # A 4xx/5xx response still proves this process served an HTTP response.
+        return True
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def _run_server_probe(command: list[str], root_path: Path, probe_url: str) -> dict[str, Any]:
+    if not any("{port}" in item for item in command):
+        raise CouncilError("A server probe command must include the {port} placeholder.")
+    checked_url = _local_probe_url(probe_url)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    argv = [item.replace("{host}", "127.0.0.1").replace("{port}", str(port)) for item in command]
+    url = checked_url.replace("{host}", "127.0.0.1").replace("{port}", str(port))
+    started = time.perf_counter()
+    timed_out = False
+    ready = False
+    process: subprocess.Popen | None = None
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as output:
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=str(root_path),
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=(os.name == "posix"),
+            )
+            deadline = time.monotonic() + WORKSPACE_SERVER_START_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                if _server_responds(url):
+                    ready = True
+                    break
+                time.sleep(0.25)
+            else:
+                timed_out = True
+        except OSError as error:
+            raise CouncilError(f"Could not start project server: {error}") from error
+        finally:
+            if process is not None and process.poll() is None:
+                try:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGTERM)
+                    else:
+                        process.terminate()
+                    process.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        if os.name == "posix":
+                            os.killpg(process.pid, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except OSError:
+                        pass
+                    process.wait(timeout=3)
+        output.seek(0)
+        stdout = output.read()
+    elapsed_ms = round((time.perf_counter() - started) * 1_000)
+    if ready:
+        stdout = f"Project responded at {url}; the preflight server was stopped.\n{stdout}"
+        code = 0
+    else:
+        code = 124 if timed_out else process.returncode if process is not None else 1
+    stdout, stdout_cut = _cap_output(stdout)
+    return {
+        "command": argv,
+        "stdout": stdout,
+        "stderr": "",
+        "returncode": code,
+        "timed_out": timed_out,
+        "duration_ms": elapsed_ms,
+        "truncated": stdout_cut,
+        "probe_url": url,
+    }
+
+
+def run_command(command: Any, root: str | None = None, probe_url: Any = None) -> dict[str, Any]:
+    """Run an allowlisted argv, or independently start and probe a local server."""
     argv = validate_command(command)
     root_path = resolve_root(root)
+    if probe_url is not None:
+        return _run_server_probe(argv, root_path, probe_url)
     started = time.perf_counter()
     try:
         completed = subprocess.run(

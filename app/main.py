@@ -82,5 +82,7 @@ if __name__ == "__main__":
     logger.info("Starting Model Council on %s:%s", host, port)
     logger.info("Memory store: %s", "available" if memory_store.available else "disabled")
     
-    # Run uvicorn pointing to app.main:app
-    uvicorn.run("app.main:app", host=host, port=port, reload=True)
+    # Limit reload watching to application code so Workspace edits under
+    # /app/workspace do not restart the server during an agent run.
+    app_code_dir = str(Path(__file__).resolve().parent)
+    uvicorn.run("app.main:app", host=host, port=port, reload=True, reload_dirs=[app_code_dir])

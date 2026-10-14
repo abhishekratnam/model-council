@@ -3,7 +3,7 @@
 
 # Model Council
 
-Model Council is a local-first web app that asks OpenAI, Claude, an Ollama model, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
+Model Council is a local-first web app that asks OpenAI, OpenRouter, Claude, an Ollama model, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
 
 The application itself runs as a FastAPI service. For local development, Python dependencies are managed with `uv`, Uvicorn runs the FastAPI application, and Redis can run separately in Docker.
 
@@ -43,18 +43,10 @@ From the project directory:
 
 ```bash
 cd /path/to/model-council
-
 uv sync
 ```
 
-If the project does not already contain a `pyproject.toml`, initialize it first:
-
-```bash
-uv init
-uv add -r requirements.txt
-```
-
-After that, use `uv run` for commands so the correct project environment is used automatically.
+The root `pyproject.toml` declares the application and test dependencies. `uv sync` installs them into the project environment; `uv run` then uses that environment automatically.
 
 ## 2. Start Redis separately with Docker
 
@@ -139,7 +131,7 @@ Keep provider API keys out of source control. Add `.env` to `.gitignore` if it i
 Start the application from the project root:
 
 ```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 Open:
@@ -165,14 +157,14 @@ docker start model-council-redis 2>/dev/null || docker run -d --name model-counc
 Then start FastAPI in another terminal:
 
 ```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 ## 6. Ollama (Local BYOK & Browser Relay)
 
 Ollama is optional. Model Council uses a **WebSocket Browser Relay** to connect to local Ollama instances. 
 
-When a user enters `http://localhost:11434` (or `http://127.0.0.1:11434`) in the UI, the FastAPI server does not try to connect to Ollama directly (which would fail in Docker or cloud deployments). Instead, FastAPI sends a WebSocket RPC message to the user's browser. The browser then makes a direct `fetch` request to the local Ollama instance and streams the tokens back to the server. 
+When a user enters `http://localhost:11434` (or `http://127.0.0.1:11434`) in the UI, council and Workspace mode send a WebSocket RPC message to the user's browser. The browser makes the request to local Ollama and streams the tokens back to the server. This keeps the same URL working when FastAPI runs inside Docker.
 
 This means **local Ollama works seamlessly whether the app is running on your host, in Docker, or deployed to a production cloud server.**
 
@@ -212,6 +204,7 @@ The first council round can use the enabled providers independently.
 
 Typical providers include:
 - OpenAI Responses API
+- OpenRouter Chat Completions API, with searchable model selection
 - Anthropic Messages API
 - Ollama
 - Azure OpenAI
@@ -229,31 +222,35 @@ For Azure or a compatible Responses API endpoint, configure the provider through
 
 Ollama responses and Ollama-led synthesis stream through the application's WebSocket connection.
 
-## 9. Workspace mode (on-device code agent)
+## 9. Workspace mode (single-provider code agent)
 
-Workspace mode turns Model Council into a local coding agent: a local Ollama model (built and
-tested with `qwen3-coder:30b`, Python-focused) explores a codebase folder, writes code, and runs
-commands — all from the browser UI.
+Workspace mode turns Model Council into a coding agent: choose one enabled provider and model
+from the members panel (Ollama, OpenAI, OpenRouter, Claude, or Azure / custom). That single model
+plans and drives the run while the agent explores a sandboxed codebase, stages changes, and asks
+for approval before applying file edits or running commands.
 
 1. Open the **Workspace · code agent** tab next to *Council debate*.
-2. Pick a local Ollama model in the members panel (e.g. `qwen3-coder:30b`).
+2. Enable and configure one provider in the members panel, then select its model under **Agent model**. Only that one model handles the run.
 3. Browse the sandboxed file tree or search the code; click any file to read it with line numbers.
 4. Describe the task (e.g. "Add a `remove_item` function to `shop/cart.py` with a test, then run pytest") and press **Run coder agent**.
-5. The agent streams one JSON action per step (`list_tree`, `search`, `read_file`, `write_file`, `edit_file`, `run_command`, `done`, `fail`). Every proposed change appears as a unified diff and every command as a terminal card — **nothing is written or executed until you approve it**. **Stop** halts the run at the next step boundary.
+5. The agent drafts an implementation plan first. Review it in the plan editor, make changes if needed, then approve it to continue or reject it to stop before implementation.
+6. After approval, the agent reads project instructions and verifies the startup path. For web apps it starts the project on a fresh loopback port, checks that it responds, then stops that temporary process. After the requested changes, it repeats the check independently of any server already running on localhost.
+7. The agent streams one JSON action per step (`list_tree`, `search`, `read_file`, `write_file`, `edit_file`, `run_command`, `done`, `fail`). Every proposed change appears as a unified diff and every command as a terminal card — **nothing is written or executed until you approve it**. **Stop** halts the run at the next step boundary.
+8. After every run, `.model_council/plans/last_session.md` is updated at the selected workspace root, following the hidden plan-folder pattern used by tools such as ZCode. The next run receives that handoff alongside the current tree, then verifies its claims against the current files before editing.
 
 ### How it stays safe
 
 - **Path jail**: every path is resolved inside the workspace root; dotfiles (`.git`, `.env`), symlink escapes, binary files, and files over 120 KB are refused.
 - **Staged diffs**: `write_file`/`edit_file` only stage a diff. The server applies it after you click **Approve**, and `edit_file` re-validates at apply time.
-- **Command allowlist**: only `python`, `python3`, `pytest`, `ruff`, `pip` argv lists (no shell), with destructive tokens and shell operators rejected, a 60 s timeout, and truncated output.
-- **Bounded runs**: default 20 steps (max 40), per-step model timeout, 5-minute confirmation timeout, and a context-window trimmer that keeps the conversation inside the local model's `num_ctx`.
+- **Command allowlist**: approved argv lists only, with no shell, destructive tokens, or shell operators; commands time out and output is truncated. Web startup probes are limited to loopback hosts and stop the temporary process after the response check.
+- **Bounded runs**: default 20 steps (max 40), per-step model timeout, 5-minute confirmation timeout, and a context-window trimmer for the selected model.
 - Commands run with the server's environment, so tools like `pytest` must be installed in the Python environment that runs the server.
 
 ### Running Workspace mode in Docker
 
 Two things change when the app runs in a container:
 
-1. **Ollama is on the host, but `127.0.0.1` inside the container is the container itself.** The code agent calls Ollama from the server process, so a `Connection refused [Errno 111]` on `127.0.0.1:11434` means the container is calling itself. Set the Ollama "Local server" field in the UI to `http://host.docker.internal:11434` (macOS/Windows Docker Desktop) and enable `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1` for the container — `docker-compose.yml` already ships with it enabled.
+1. **Ollama is on the host.** Keep the UI's "Local server" field set to `http://localhost:11434` (or `http://127.0.0.1:11434`). Council and Workspace requests are relayed through the browser, so the URL points to the host Ollama even when FastAPI runs inside Docker. `host.docker.internal` is only needed if you intentionally configure a direct server-to-Ollama connection.
 2. **The workspace folder must be mounted into the container** and commands run *inside* the container. Set `MODEL_COUNCIL_WORKSPACE_ROOT=/workspace` and mount your codebase at `/workspace` (see the commented volume in `docker-compose.yml`); `pytest`/`python` must exist in the image's environment.
 
 For the smoothest Workspace-mode experience, run the app host-native (`uv run` / `.venv`) — Ollama, your codebase, and your Python tools are then all in the same environment.
@@ -270,13 +267,13 @@ curl http://localhost:8787/api/health
 
 ## 11. Run tests
 
-Run the test suite with:
+Run the integration suite with:
 
 ```bash
-uv run python -m unittest discover -s tests -v
+uv run pytest tests -v
 ```
 
-The tests should use mocks and should not require real OpenAI, Anthropic, or Ollama credentials.
+The default `dev` dependency group includes pytest and its HTTP test client. Tests use mocked model providers and do not require real API keys, Redis, Ollama, or a separately running app server.
 
 ## 12. Docker Compose
 
@@ -346,7 +343,7 @@ OLLAMA_ORIGINS="http://localhost:8787" ollama serve
 ```bash
 cd /path/to/model-council
 uv sync
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload
+uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 For this host-native setup, your `.env` should point to:
@@ -361,3 +358,14 @@ Then open:
 ```text
 http://localhost:8787
 ```
+
+## Running the test suite
+
+With uv, install and run the suite using the commands above. For a pip-managed virtual environment, install the development requirements and run pytest:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -v
+```
+
+The server preflight test starts its own short-lived HTTP server on a free loopback port.

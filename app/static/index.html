@@ -33,7 +33,7 @@
           <p class="eyebrow">MULTI-MODEL DELIBERATION</p>
           <h1 id="page-title">Ask several minds.<br /><span>Choose the clearest answer.</span></h1>
           <p class="lede">
-            OpenAI, Claude, your local Ollama model, and an Azure or compatible endpoint can answer independently. Choose the evidence you trust, then appoint a chair to write the final synthesis.
+            OpenAI, OpenRouter, Claude, your local Ollama model, and an Azure or compatible endpoint can answer independently. Choose the evidence you trust, then appoint a chair to write the final synthesis.
           </p>
         </div>
         <aside class="privacy-note" aria-label="Key handling notice">
@@ -55,7 +55,7 @@
             <span class="member-count" id="member-count">3 seats</span>
           </div>
 
-          <div class="provider-stack">
+          <div id="enabled-provider-stack" class="provider-stack">
 
             <article class="provider-card provider-ollama" data-provider-card="ollama">
               <div class="provider-head">
@@ -88,16 +88,13 @@
                 <label class="field-label" for="ollama-model">Local model</label>
                 <button id="refresh-ollama" class="quiet-button" type="button">Refresh</button>
               </div>
-              <input
+              <select
                 id="ollama-model"
                 class="field-input"
-                list="ollama-model-options"
-                placeholder="Choose or type a local model"
-                maxlength="200"
-                autocapitalize="off"
-                spellcheck="false"
-              />
-              <datalist id="ollama-model-options"></datalist>
+                aria-label="Local model"
+              >
+                <option value="">Refresh to load local models</option>
+              </select>
               <p id="ollama-status" class="connection-note">
                 Gemma 4 is preselected. Pull it with <code>ollama pull gemma4</code>, then refresh.<br><br>
                 <strong>Important:</strong> If you get a connection error, Ollama is blocking browser requests. 
@@ -133,6 +130,36 @@
                 />
                 <button class="reveal-secret" type="button" data-reveal="openai-key" aria-label="Show OpenAI API key">Show</button>
               </div>
+            </article>
+
+            <article class="provider-card provider-openrouter" data-provider-card="openrouter">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph openrouter-glyph" aria-hidden="true">↗</span>
+                  <div>
+                    <h3>OpenRouter</h3>
+                    <p>Multi-model council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable OpenRouter">
+                  <input id="openrouter-enabled" type="checkbox" />
+                  <span></span>
+                </label>
+              </div>
+              <label class="field-label" for="openrouter-key">API key</label>
+              <div class="secret-field">
+                <input id="openrouter-key" class="field-input" type="password" placeholder="sk-or-v1-…" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                <button class="reveal-secret" type="button" data-reveal="openrouter-key" aria-label="Show OpenRouter API key">Show</button>
+              </div>
+              <div class="inline-label-row model-row">
+                <label class="field-label" for="openrouter-model">Model</label>
+                <button id="refresh-openrouter" class="quiet-button" type="button">Refresh</button>
+              </div>
+              <input id="openrouter-model-search" class="field-input field-input-small" type="search" placeholder="Filter model names or IDs…" aria-label="Filter OpenRouter models" />
+              <select id="openrouter-model" class="field-input" aria-label="OpenRouter model">
+                <option value="">Refresh to load OpenRouter models</option>
+              </select>
+              <p id="openrouter-status" class="connection-note">Enter an OpenRouter key, then refresh to load available text models.</p>
             </article>
 
             <article class="provider-card provider-custom" data-provider-card="custom">
@@ -243,6 +270,11 @@
             </article>
 
           </div>
+
+          <details id="disabled-provider-details" class="disabled-provider-details" hidden>
+            <summary>Show disabled providers <span id="disabled-provider-count">0</span><span aria-hidden="true">▾</span></summary>
+            <div id="disabled-provider-stack" class="provider-stack"></div>
+          </details>
 
           <button id="clear-session" class="clear-button" type="button">Clear keys &amp; results</button>
 
@@ -379,7 +411,7 @@
             <div class="panel-heading prompt-heading">
               <div>
                 <p class="eyebrow">02 / WORKSPACE</p>
-                <h2>On-device code agent</h2>
+                <h2>Workspace code agent</h2>
               </div>
               <div class="root-picker">
                 <label class="root-picker-label" for="workspace-root-select">Root</label>
@@ -387,8 +419,8 @@
               </div>
             </div>
             <p class="workspace-disclosure">
-              A local Ollama model explores the sandboxed folder below and writes code. Every
-              file change and every command waits for your explicit approval, and
+              Choose one enabled provider for the full coding run. Cloud providers receive task
+              and workspace context. Every file change and command waits for your explicit approval, and
               <strong>Stop</strong> halts the run at the next step boundary.
             </p>
 
@@ -427,6 +459,11 @@
                   placeholder="e.g. Add a workspace stats endpoint that returns file count and total lines, with a pytest test."
                 ></textarea>
                 <div class="workspace-task-meta">
+                  <label class="agent-steps-label" for="agent-provider">Agent model
+                    <select id="agent-provider" class="field-input">
+                      <option value="">Choose an enabled provider</option>
+                    </select>
+                  </label>
                   <label class="agent-steps-label" for="agent-max-steps">Max steps
                     <select id="agent-max-steps" class="field-input">
                       <option value="10">10</option>
@@ -435,7 +472,7 @@
                       <option value="40">40</option>
                     </select>
                   </label>
-                  <span class="muted">Uses your local Ollama model — pick one in the members panel (e.g. <code>qwen3-coder:30b</code>).</span>
+                  <span class="muted">One enabled provider handles the plan and every coding step in each run.</span>
                 </div>
                 <div class="action-row">
                   <button id="cancel-agent" class="danger-button" type="button" hidden>

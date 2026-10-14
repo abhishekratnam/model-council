@@ -29,15 +29,23 @@
     finalText: $("#final-text"),
     copyFinal: $("#copy-final"),
     toast: $("#toast"),
+    enabledProviderStack: $("#enabled-provider-stack"),
+    disabledProviderStack: $("#disabled-provider-stack"),
+    disabledProviderDetails: $("#disabled-provider-details"),
+    disabledProviderCount: $("#disabled-provider-count"),
     openaiModel: $("#openai-model"),
     openaiKey: $("#openai-key"),
+    openrouterKey: $("#openrouter-key"),
+    openrouterModel: $("#openrouter-model"),
+    openrouterModelSearch: $("#openrouter-model-search"),
+    openrouterRefresh: $("#refresh-openrouter"),
+    openrouterStatus: $("#openrouter-status"),
     anthropicModel: $("#anthropic-model"),
     anthropicKey: $("#anthropic-key"),
     ollamaRefresh: $("#refresh-ollama"),
     ollamaStatus: $("#ollama-status"),
     ollamaModel: $("#ollama-model"),
     ollamaBaseUrl: $("#ollama-base-url"),
-    ollamaOptions: $("#ollama-model-options"),
     customMode: $("#custom-mode"),
     customStatus: $("#custom-status"),
     customJson: $("#custom-json"),
@@ -51,6 +59,7 @@
     customEnabled: $("#custom-enabled"),
     enabledInputs: {
       openai: $("#openai-enabled"),
+      openrouter: $("#openrouter-enabled"),
       custom: $("#custom-enabled"),
       anthropic: $("#anthropic-enabled"),
       ollama: $("#ollama-enabled"),
@@ -85,6 +94,7 @@
     fileViewerMeta: $("#file-viewer-meta"),
     fileViewerCode: $("#file-viewer-code"),
     codeTask: $("#code-task"),
+    agentProvider: $("#agent-provider"),
     agentMaxSteps: $("#agent-max-steps"),
     runAgent: $("#run-agent"),
     cancelAgent: $("#cancel-agent"),
@@ -98,8 +108,8 @@
     agentSummaryText: $("#agent-summary-text"),
   };
 
-  const providers = ["openai", "custom", "anthropic", "ollama"];
-  const providerLabels = { openai: "OpenAI", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama" };
+  const providers = ["openai", "openrouter", "custom", "anthropic", "ollama"];
+  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama" };
 
   // Streaming deltas re-render the whole accumulated answer (O(text length)
   // each time), so coalesce them to at most one markdown render per interval.
@@ -108,6 +118,7 @@
 
   const state = {
     members: [],
+    openrouterModels: [],
     question: "",
     finalAnswer: "",
     toastTimer: null,
@@ -291,7 +302,8 @@
       think: false,
       messages: message.messages,
       options: message.options,
-      keep_alive: message.keep_alive || "5m"
+      keep_alive: message.keep_alive || "5m",
+      ...(message.format ? { format: message.format } : {})
     };
 
     const controller = new AbortController();
@@ -421,6 +433,7 @@
 
   function buildProviderSettings() {
     const openaiEnabled = isEnabled("openai");
+    const openrouterEnabled = isEnabled("openrouter");
     const anthropicEnabled = isEnabled("anthropic");
     const ollamaEnabled = isEnabled("ollama");
     const customEnabled = isEnabled("custom");
@@ -435,6 +448,11 @@
         enabled: openaiEnabled,
         model: elements.openaiModel.value.trim(),
         api_key: openaiEnabled ? elements.openaiKey.value : "",
+      },
+      openrouter: {
+        enabled: openrouterEnabled,
+        model: elements.openrouterModel.value.trim(),
+        api_key: openrouterEnabled ? elements.openrouterKey.value : "",
       },
       anthropic: {
         enabled: anthropicEnabled,
@@ -530,11 +548,49 @@
     const card = document.querySelector(`[data-provider-card="${provider}"]`);
     const enabled = isEnabled(provider);
     card.classList.toggle("is-disabled", !enabled);
-    card.querySelectorAll('input:not([type="checkbox"]), button').forEach((control) => {
+    card.querySelectorAll('input:not([type="checkbox"]), select, button').forEach((control) => {
       control.disabled = !enabled;
     });
+    const destination = enabled ? elements.enabledProviderStack : elements.disabledProviderStack;
+    if (card.parentElement !== destination) destination.append(card);
     if (provider === "custom") syncCustomMode();
     updateMemberCount();
+    updateDisabledProviderCount();
+    updateAgentProviderOptions();
+  }
+
+  function updateAgentProviderOptions() {
+    if (state.agentRunning) return;
+    const settings = buildProviderSettings();
+    const eligible = providers.filter((provider) => {
+      const config = settings[provider];
+      if (!config.enabled || !config.model) return false;
+      if (["openai", "openrouter", "anthropic"].includes(provider)) return Boolean(config.api_key.trim());
+      if (provider === "custom") {
+        return Boolean(config.endpoint.trim()) && (config.auth_type === "none" || Boolean(config.api_key.trim()));
+      }
+      return provider === "ollama";
+    });
+    const selected = elements.agentProvider.value;
+    const options = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = eligible.length ? "Choose one agent model" : "Enable and configure a provider";
+    options.append(placeholder);
+    for (const provider of eligible) {
+      const option = document.createElement("option");
+      option.value = provider;
+      option.textContent = `${provider === "custom" && settings.custom.label ? settings.custom.label : providerLabels[provider]} · ${settings[provider].model}`;
+      options.append(option);
+    }
+    elements.agentProvider.replaceChildren(options);
+    elements.agentProvider.value = eligible.includes(selected) ? selected : (eligible.length === 1 ? eligible[0] : "");
+  }
+
+  function updateDisabledProviderCount() {
+    const count = elements.disabledProviderStack.children.length;
+    elements.disabledProviderCount.textContent = String(count);
+    elements.disabledProviderDetails.hidden = count === 0;
   }
 
   function updateMemberCount() {
@@ -1047,6 +1103,65 @@
     }
   }
 
+  function renderOpenRouterModelOptions() {
+    const selectedModel = elements.openrouterModel.value;
+    const query = elements.openrouterModelSearch.value.trim().toLowerCase();
+    const matches = state.openrouterModels.filter((model) =>
+      !query || `${model.id} ${model.name}`.toLowerCase().includes(query)
+    );
+    if (selectedModel && !matches.some((model) => model.id === selectedModel)) {
+      const selected = state.openrouterModels.find((model) => model.id === selectedModel);
+      if (selected) matches.unshift(selected);
+    }
+
+    const options = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = state.openrouterModels.length
+      ? (matches.length ? "Choose an OpenRouter model" : "No matching models")
+      : "Refresh to load OpenRouter models";
+    options.append(placeholder);
+    for (const model of matches.slice(0, 250)) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = `${model.name} · ${model.id}`;
+      options.append(option);
+    }
+    elements.openrouterModel.replaceChildren(options);
+    elements.openrouterModel.value = selectedModel;
+  }
+
+  async function refreshOpenRouterModels() {
+    if (elements.openrouterRefresh.disabled) return;
+    const api_key = elements.openrouterKey.value.trim();
+    if (!api_key) {
+      elements.openrouterStatus.textContent = "Enter your OpenRouter API key first.";
+      elements.openrouterStatus.className = "connection-note is-error";
+      return;
+    }
+
+    elements.openrouterRefresh.disabled = true;
+    elements.openrouterRefresh.textContent = "Loading…";
+    elements.openrouterStatus.textContent = "Loading available text models…";
+    elements.openrouterStatus.className = "connection-note";
+    try {
+      const data = await request("/api/openrouter/models", { api_key });
+      state.openrouterModels = Array.isArray(data.models) ? data.models : [];
+      renderOpenRouterModelOptions();
+      updateAgentProviderOptions();
+      elements.openrouterStatus.textContent = state.openrouterModels.length
+        ? `${state.openrouterModels.length.toLocaleString()} text models available. Search by name or model ID.`
+        : "OpenRouter returned no text models.";
+      elements.openrouterStatus.className = "connection-note is-ready";
+    } catch (error) {
+      elements.openrouterStatus.textContent = error.message || "Could not load OpenRouter models.";
+      elements.openrouterStatus.className = "connection-note is-error";
+    } finally {
+      elements.openrouterRefresh.disabled = !isEnabled("openrouter");
+      elements.openrouterRefresh.textContent = "Refresh";
+    }
+  }
+
   async function refreshOllama() {
     if (elements.ollamaRefresh.disabled) return;
     elements.ollamaRefresh.disabled = true;
@@ -1077,18 +1192,27 @@
       const models = Array.isArray(data.models) ? data.models : [];
       const installedModelNames = new Set();
       const options = document.createDocumentFragment();
+      const selectedBeforeRefresh = elements.ollamaModel.value;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = models.length ? "Choose a local model" : "No local models found";
+      options.append(placeholder);
       for (const model of models) {
         if (!model || typeof model.name !== "string") continue;
-        installedModelNames.add(model.name);
+        const name = model.name.trim();
+        if (!name || installedModelNames.has(name)) continue;
+        installedModelNames.add(name);
         const option = document.createElement("option");
-        option.value = model.name;
+        option.value = name;
+        option.textContent = name;
         options.append(option);
       }
-      elements.ollamaOptions.replaceChildren(options);
-      if (!elements.ollamaModel.value && models[0] && models[0].name) {
-        elements.ollamaModel.value = models[0].name;
-      }
-      const count = models.length;
+      elements.ollamaModel.replaceChildren(options);
+      elements.ollamaModel.value = installedModelNames.has(selectedBeforeRefresh)
+        ? selectedBeforeRefresh
+        : (installedModelNames.values().next().value || "");
+      updateAgentProviderOptions();
+      const count = installedModelNames.size;
       const selectedModel = elements.ollamaModel.value.trim();
       const gemma4Installed = [...installedModelNames].some((name) => name === "gemma4" || name.startsWith("gemma4:"));
       if (gemma4Installed) {
@@ -1146,6 +1270,7 @@
     state.finalRenderTimer = null;
     state.pendingMemberProviders.clear();
     elements.openaiKey.value = "";
+    elements.openrouterKey.value = "";
     elements.anthropicKey.value = "";
     elements.customKey.value = "";
     elements.customJson.value = "";
@@ -1385,6 +1510,7 @@
   function setAgentBusy(busy) {
     state.agentRunning = busy;
     elements.runAgent.disabled = busy;
+    elements.agentProvider.disabled = busy;
     elements.runAgent.classList.toggle("is-loading", busy);
     elements.runAgent.querySelector(".button-label").textContent = busy ? "Agent working" : "Run coder agent";
     elements.cancelAgent.hidden = !busy;
@@ -1392,6 +1518,7 @@
     const labelEl = elements.cancelAgent.querySelector(".button-label");
     if (labelEl) labelEl.textContent = "Stop agent";
     if (!busy) state.agentStopped = false;
+    if (!busy) updateAgentProviderOptions();
   }
 
   function upsertAgentStep(event) {
@@ -1473,6 +1600,12 @@
       command.textContent = Array.isArray(event.command) ? event.command.join(" ") : "";
       head.append(strong, command);
       card.append(head);
+      if (event.probe_url) {
+        const probe = document.createElement("span");
+        probe.className = "confirm-note";
+        probe.textContent = `Startup check: ${event.probe_url}`;
+        card.append(probe);
+      }
       elements.agentFeed.append(card);
     }
     card.dataset.confirmId = confirmId;
@@ -1494,6 +1627,68 @@
     row.append(approve, reject, note);
     card.append(row);
     card.scrollIntoView({ block: "nearest" });
+  }
+
+  function attachPlanReview(event) {
+    const card = document.createElement("section");
+    card.className = "agent-plan-card is-pending";
+    card.dataset.reviewId = event.review_id;
+
+    const head = document.createElement("div");
+    head.className = "agent-plan-head";
+    const title = document.createElement("strong");
+    title.textContent = "Implementation plan";
+    const note = document.createElement("span");
+    note.className = "confirm-note";
+    note.textContent = "Review and edit this plan before implementation starts.";
+    head.append(title, note);
+
+    const editor = document.createElement("textarea");
+    editor.className = "agent-plan-editor";
+    editor.setAttribute("aria-label", "Edit the coding agent implementation plan");
+    editor.value = event.plan || "";
+
+    const actions = document.createElement("div");
+    actions.className = "confirm-row";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "confirm-approve";
+    approve.textContent = "Approve plan & continue";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "confirm-reject";
+    reject.textContent = "Reject plan";
+    approve.addEventListener("click", () => answerPlanReview(event.review_id, true, editor.value, card));
+    reject.addEventListener("click", () => answerPlanReview(event.review_id, false, editor.value, card));
+    actions.append(approve, reject);
+
+    card.append(head, editor, actions);
+    elements.agentFeed.append(card);
+    card.scrollIntoView({ block: "nearest" });
+    editor.focus();
+  }
+
+  function answerPlanReview(reviewId, approved, plan, card) {
+    if (!state.streamSocket || state.streamSocket.readyState !== WebSocket.OPEN) {
+      const note = card.querySelector(".confirm-note");
+      if (note) note.textContent = "Connection closed; the plan was not submitted.";
+      return;
+    }
+    state.streamSocket.send(JSON.stringify({ rpc: "agent_plan_review", review_id: reviewId, approved, plan }));
+    card.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    const note = card.querySelector(".confirm-note");
+    if (note) note.textContent = approved ? "Submitting approved plan…" : "Submitting rejection…";
+  }
+
+  function markPlanReview(card, approved, noteText) {
+    if (!card) return;
+    card.classList.remove("is-pending");
+    card.classList.add(approved ? "is-approved" : "is-rejected");
+    card.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    const note = card.querySelector(".confirm-note");
+    if (note) note.textContent = noteText || (approved ? "Approved" : "Rejected");
+    const editor = card.querySelector(".agent-plan-editor");
+    if (editor) editor.disabled = true;
   }
 
   function answerConfirm(confirmId, approved, card) {
@@ -1518,6 +1713,9 @@
   function closeOpenConfirms() {
     elements.agentFeed.querySelectorAll(".agent-diff-card.is-pending").forEach((card) => {
       markConfirm(card, false, "Closed");
+    });
+    elements.agentFeed.querySelectorAll(".agent-plan-card.is-pending").forEach((card) => {
+      markPlanReview(card, false, "Closed");
     });
     state.pendingDiffCard = null;
   }
@@ -1557,8 +1755,10 @@
       }
     }
     const providerSettings = buildProviderSettings();
-    if (!providerSettings.ollama.enabled || !providerSettings.ollama.model) {
-      showToast("Enable Ollama and choose a local model (e.g. qwen3-coder:30b).", "error");
+    const agentProvider = elements.agentProvider.value;
+    const agentConfig = providerSettings[agentProvider];
+    if (!agentProvider || !agentConfig || !agentConfig.enabled || !agentConfig.model) {
+      showToast("Enable and configure a provider, then choose one Agent model.", "error");
       return;
     }
 
@@ -1579,7 +1779,8 @@
         task,
         root: state.workspaceRoot,
         max_steps: Number(elements.agentMaxSteps.value),
-        providers: { ollama: providerSettings.ollama },
+        agent_provider: agentProvider,
+        providers: { [agentProvider]: agentConfig },
       }, (event) => {
         if (event.type === "agent_start") {
           state.agentRoundId = event.round_id || "";
@@ -1588,13 +1789,25 @@
             elements.workspaceRootSelect.value = state.workspaceRoot;
           }
           elements.workspaceRootSelect.title = state.workspaceRoot;
-          elements.agentRunTitle.textContent = `Agent · ${event.model || "local model"}`;
+          elements.agentRunTitle.textContent = `Agent · ${event.provider_label || providerLabels[event.provider] || "model"} · ${event.model || ""}`;
         } else if (event.type === "agent_delta") {
           if (!state.agentStopped) elements.agentStreamText.append(document.createTextNode(event.delta || ""));
         } else if (event.type === "agent_step") {
           upsertAgentStep(event);
         } else if (event.type === "agent_diff") {
           appendDiffCard(event);
+        } else if (event.type === "agent_plan") {
+          attachPlanReview(event);
+        } else if (event.type === "agent_plan_review_done") {
+          const card = elements.agentFeed.querySelector(`[data-review-id="${event.review_id}"]`);
+          markPlanReview(card, event.approved, event.approved ? "Approved" : "Rejected");
+        } else if (event.type === "agent_plan_review_error") {
+          const card = elements.agentFeed.querySelector(`[data-review-id="${event.review_id}"]`);
+          if (card) {
+            const note = card.querySelector(".confirm-note");
+            if (note) note.textContent = event.message || "Please enter a plan before approving.";
+            card.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+          }
         } else if (event.type === "agent_confirm") {
           attachConfirm(event);
         } else if (event.type === "agent_confirm_done") {
@@ -1621,13 +1834,16 @@
   }
 
   function finishAgentRun(data) {
-    const status = data.cancelled ? "cancelled" : data.ok ? "complete" : "error";
-    setAgentStatus(status, data.cancelled ? "Stopped" : data.ok ? "Completed" : "Ended");
+    const status = data.cancelled ? "cancelled" : data.plan_status === "rejected" ? "rejected" : data.ok ? "complete" : "error";
+    const label = data.cancelled ? "Stopped" : data.plan_status === "rejected" ? "Plan rejected" : data.ok ? "Completed" : "Ended";
+    setAgentStatus(status, label);
     const meta = [];
     if (Array.isArray(data.steps)) meta.push(`${data.steps.length} step${data.steps.length === 1 ? "" : "s"}`);
     if (Array.isArray(data.applied_changes) && data.applied_changes.length) {
       meta.push(`applied: ${data.applied_changes.join(", ")}`);
     }
+    if (data.session_log) meta.push(`session log: ${data.session_log}`);
+    if (data.session_log_error) meta.push(data.session_log_error);
     if (data.usage && Number.isFinite(data.usage.eval_count)) {
       meta.push(`${data.usage.eval_count.toLocaleString()} output tokens`);
     }
@@ -1637,7 +1853,7 @@
       .filter(Boolean)
       .join("\n\n");
     renderMarkdown(elements.agentSummaryText, body);
-    if (Array.isArray(data.applied_changes) && data.applied_changes.length) loadTree();
+    if (data.session_log || (Array.isArray(data.applied_changes) && data.applied_changes.length)) loadTree();
   }
 
   async function cancelAgent() {
@@ -1674,6 +1890,12 @@
       elements.enabledInputs[provider].addEventListener("change", () => syncProviderCard(provider));
       syncProviderCard(provider);
     });
+    $$('[data-provider-card] input, [data-provider-card] select').forEach((control) => {
+      control.addEventListener("input", updateAgentProviderOptions);
+      control.addEventListener("change", updateAgentProviderOptions);
+    });
+    elements.openrouterRefresh.addEventListener("click", refreshOpenRouterModels);
+    elements.openrouterModelSearch.addEventListener("input", renderOpenRouterModelOptions);
     elements.customMode.addEventListener("change", syncCustomMode);
     elements.applyCustomJson.addEventListener("click", applyCustomJson);
 

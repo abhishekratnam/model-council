@@ -175,7 +175,7 @@ def provider_ready(provider: str, config: dict[str, Any], *, require_enabled: bo
         return "Disabled"
     if not provider_model(config):
         return "Choose a model"
-    if provider in {"openai", "anthropic"}:
+    if provider in {"openai", "openrouter", "anthropic"}:
         key = config.get("api_key", "")
         if not isinstance(key, str) or not key.strip():
             return "No API key supplied"

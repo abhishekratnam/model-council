@@ -39,7 +39,7 @@ def extract_anthropic_text(response: dict[str, Any]) -> str:
     raise ProviderError("Claude returned no text output.")
 
 def usage_fields(response: dict[str, Any], provider: str) -> dict[str, int]:
-    if provider in {"openai", "anthropic", "custom"}:
+    if provider in {"openai", "openrouter", "anthropic", "custom"}:
         usage = response.get("usage")
         if isinstance(usage, dict):
             return {key: value for key, value in usage.items() if isinstance(value, int)}

@@ -11,10 +11,8 @@ services:
       - MODEL_COUNCIL_ALLOW_NETWORK=1
       # Points to the redis service below
       - MODEL_COUNCIL_REDIS_URL=redis://host.docker.internal:6379/0
-      # The CODE AGENT calls Ollama from inside the container, where 127.0.0.1
-      # is the container itself, not your Mac. Keep the UI's Ollama "Local
-      # server" field at http://host.docker.internal:11434 (macOS/Windows
-      # Docker Desktop) and keep this flag enabled:
+      # Optional support for direct connections to remote Ollama servers.
+      # Local Ollama uses the browser relay, so use localhost in the UI.
       - MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
       # Optional: Set your allowed browser origins here
       # - MODEL_COUNCIL_ALLOWED_ORIGINS=http://localhost:8787
