@@ -13,6 +13,12 @@ from app.api.websocket import router as ws_router
 
 app = FastAPI(title="Model Council", version="2.0")
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # ── Middleware ───────────────────────────────────────────────────────────────
 
 @app.middleware("http")

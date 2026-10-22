@@ -1,4 +1,5 @@
 import logging
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -60,6 +61,10 @@ WORKSPACE_SERVER_START_TIMEOUT_SECONDS = 20
 CODE_AGENT_DEFAULT_MAX_STEPS = 20
 CODE_AGENT_MAX_STEPS_LIMIT = 40
 CODE_AGENT_CONFIRM_TIMEOUT_SECONDS = 300
+try:
+    CODE_AGENT_PLAN_CONFIRM_TIMEOUT_SECONDS = max(1, int(os.getenv("MC_CONFIRM_TIMEOUT_S", "1800")))
+except ValueError:
+    CODE_AGENT_PLAN_CONFIRM_TIMEOUT_SECONDS = 1800
 CODE_AGENT_TOOL_RESULT_CHARS = 6_000
 CODE_AGENT_HISTORY_CHAR_BUDGET = 48_000
 CODE_AGENT_NUM_CTX = 16_384
@@ -133,16 +138,18 @@ Available actions — respond with ONLY a JSON object, no markdown, no commentar
 {"action": "list_tree"}                                            — show the folder structure
 {"action": "search", "query": "...", "is_regex": false}            — find code (max 40 matches)
 {"action": "read_file", "path": "app/services/x.py", "offset": 1, "limit": 400}  — offset/limit optional
-{"action": "write_file", "path": "...", "content": "full new file content"}      — staged as a diff, needs user confirmation
-{"action": "edit_file", "path": "...", "find": "exact existing text", "replace": "new text"}  — find must match exactly once; staged, needs confirmation
-{"action": "run_command", "command": ["python", "-m", "pytest", "-q"]}           — allowlisted commands only; needs confirmation
-{"action": "run_command", "command": ["uv", "run", "uvicorn", "app:app", "--host", "{host}", "--port", "{port}"], "probe_url": "http://{host}:{port}/"} — start a server on a fresh local port, verify it responds, then stop it; needs confirmation
+{"action": "write_file", "path": "...", "content": "full new file content"}      — staged as a diff; exact paths in the approved plan are auto-applied, other paths need confirmation
+{"action": "edit_file", "path": "...", "find": "exact existing text", "replace": "new text"}  — find must match exactly once; staged; exact paths in the approved plan are auto-applied
+{"action": "run_command", "command": "python3 -m pytest -q"}                   — run without another prompt only when the exact command is in the approved plan
+{"action": "run_command", "command": "python3 -m uvicorn app.main:app --host {host} --port {port}", "probe_url": "http://{host}:{port}/"} — start a server on a fresh local port, verify it responds, then stop it; needs confirmation unless the exact command is in the plan
 {"action": "done", "summary": "what you changed and how you verified it"}
 {"action": "fail", "summary": "why you could not complete the task"}
 
 Rules:
 - The starter context includes a user-approved implementation plan. Follow its order and scope;
-  if new findings require changing it, explain the discrepancy and ask before expanding scope.
+  do not ask again for exact listed files or commands. Ask before expanding scope.
+- Network, destructive, and outside-workspace actions always require explicit confirmation.
+  The Full access UI toggle skips ordinary command prompts only; never bypass validation.
 - Start with a project preflight before making requested enhancements:
   1. Inspect the current tree and project manifests / README to identify the real entry point
      and local startup command.

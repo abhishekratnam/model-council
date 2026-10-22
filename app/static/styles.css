@@ -1379,6 +1379,8 @@ input[type="range"] {
   .setup-panel { min-height: unset; border-right: 0; border-bottom: 1px solid var(--line); }
   .clear-button { margin-top: 18px; }
   .deliberation-panel { padding: 30px 24px 38px; }
+  .prompt-heading { align-items: flex-start; flex-direction: column; }
+  .root-picker { width: 100%; min-width: 0; max-width: none; }
 }
 
 @media (max-width: 580px) {
@@ -1803,6 +1805,39 @@ input[type="range"] {
   padding: 4px 8px;
 }
 
+.agent-mode-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+
+.agent-mode-label {
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+#full-access-toggle.is-active {
+  border-color: var(--orange);
+  color: var(--orange-soft);
+}
+
+.pending-plan-card {
+  border: 1px solid var(--orange);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 12px 0;
+  background: rgba(233, 127, 61, 0.08);
+}
+
+.pending-plan-card p {
+  color: var(--muted);
+  margin: 7px 0 12px;
+  overflow-wrap: anywhere;
+}
+
 #agent-provider { max-width: min(100%, 360px); }
 
 .agent-activity {
@@ -2138,14 +2173,90 @@ input[type="range"] {
 }
 
 .agent-summary {
-  margin-top: 14px;
+  margin-top: 16px;
+  padding: clamp(16px, 3vw, 26px);
+  border-color: rgba(174, 156, 255, 0.24);
+  background: linear-gradient(145deg, rgba(25, 22, 36, 0.88), rgba(12, 11, 17, 0.92));
+}
+
+.agent-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.agent-summary-head h3 {
+  margin: 4px 0 0;
+  color: #f1eef8;
+  font-size: clamp(1.2rem, 2vw, 1.5rem);
+  font-weight: 620;
+  letter-spacing: -0.025em;
+}
+
+.agent-summary-text {
+  max-width: 880px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.agent-summary-text h1,
+.agent-summary-text h2,
+.agent-summary-text h3 {
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agent-summary-text h1:first-child,
+.agent-summary-text h2:first-child,
+.agent-summary-text h3:first-child {
+  margin-top: 0;
+}
+
+.agent-summary-text li::marker {
+  color: #b6a7ff;
+}
+
+.agent-summary-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.agent-summary-item {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.agent-summary-label {
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-summary-value {
+  color: #d8d3e4;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .root-picker {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  max-width: 46%;
+  display: grid;
+  gap: 0.3rem;
+  min-width: min(32rem, 55%);
+  max-width: 60%;
 }
 
 .root-picker-label {
@@ -2154,6 +2265,30 @@ input[type="range"] {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   white-space: nowrap;
+}
+
+.companion-controls,
+.server-root-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.companion-controls .field-input {
+  width: min(13rem, 48vw);
+}
+
+#companion-status,
+#workspace-selected-root {
+  display: block;
+  max-width: min(32rem, 80vw);
+  overflow-wrap: anywhere;
+  margin-top: 0.35rem;
+}
+
+.server-root-controls {
+  margin-top: 0.5rem;
 }
 
 .root-select {

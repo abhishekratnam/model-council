@@ -85,6 +85,12 @@
     councilMode: $("#council-mode"),
     workspaceMode: $("#workspace-mode"),
     workspaceRootSelect: $("#workspace-root-select"),
+    companionCode: $("#companion-code"),
+    pairCompanion: $("#pair-companion"),
+    pickLocalFolder: $("#pick-local-folder"),
+    companionStatus: $("#companion-status"),
+    selectedRoot: $("#workspace-selected-root"),
+    useServerWorkspace: $("#use-server-workspace"),
     loadTree: $("#load-tree"),
     workspaceSearch: $("#workspace-search"),
     runSearch: $("#run-search"),
@@ -96,6 +102,12 @@
     codeTask: $("#code-task"),
     agentProvider: $("#agent-provider"),
     agentMaxSteps: $("#agent-max-steps"),
+    fullAccessToggle: $("#full-access-toggle"),
+    pendingPlanCard: $("#pending-plan-card"),
+    pendingPlanSummary: $("#pending-plan-summary"),
+    pendingPlanApprove: $("#pending-plan-approve"),
+    pendingPlanReject: $("#pending-plan-reject"),
+    pendingPlanDiscard: $("#pending-plan-discard"),
     runAgent: $("#run-agent"),
     cancelAgent: $("#cancel-agent"),
     agentActivity: $("#agent-activity"),
@@ -106,6 +118,7 @@
     agentFeed: $("#agent-feed"),
     agentSummaryCard: $("#agent-summary-card"),
     agentSummaryText: $("#agent-summary-text"),
+    agentSummaryMeta: $("#agent-summary-meta"),
   };
 
   const providers = ["openai", "openrouter", "custom", "anthropic", "ollama"];
@@ -146,6 +159,11 @@
     agentStepRows: new Map(),
     pendingDiffCard: null,
     workspaceRoot: "",
+    workspaceMode: "server",
+    companionRoot: "",
+    fullAccess: false,
+    pendingPausedPlan: null,
+    resumePlanId: "",
   };
 
   // ── Memory & Session Helpers ──────────────────────────────────────────────
@@ -294,6 +312,50 @@
     }
     return body;
   }
+
+  function companionToken() {
+    return sessionStorage.getItem("model_council_companion_token") || "";
+  }
+
+  async function companionRequest(path, payload, method = "POST") {
+    const token = companionToken();
+    let response;
+    try {
+      response = await fetch(`http://127.0.0.1:8766${path}`, {
+        method,
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        cache: "no-store",
+        body: payload === undefined ? undefined : JSON.stringify(payload),
+      });
+    } catch (_) {
+      throw new Error("Could not reach the local companion on 127.0.0.1:8766. Start it on this computer and keep its terminal open.");
+    }
+    let body = {};
+    try { body = await response.json(); } catch (_) { /* handled below */ }
+    if (!response.ok) {
+      throw new Error(body.error || body.detail || `Local companion request failed (${response.status}).`);
+    }
+    return body;
+  }
+
+  async function handleWorkspaceCompanionRpc(socket, message) {
+    try {
+      const data = await companionRequest(
+        `/workspace/${encodeURIComponent(message.operation)}`,
+        message.args || {},
+      );
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ rpc: "workspace_companion_result", request_id: message.request_id, ok: true, result: data }));
+      }
+    } catch (error) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ rpc: "workspace_companion_result", request_id: message.request_id, ok: false, error: error.message }));
+      }
+    }
+  }
   async function handleOllamaRpc(socket, message) {
     const base_url = elements.ollamaBaseUrl.value.trim() || "http://127.0.0.1:11434";
     const payload = {
@@ -399,6 +461,10 @@
 
         if (message.type === "rpc_ollama_chat") {
           handleOllamaRpc(socket, message);
+          return;
+        }
+        if (message.type === "workspace_companion_request") {
+          handleWorkspaceCompanionRpc(socket, message);
           return;
         }
 
@@ -1306,6 +1372,83 @@
     if (isWorkspace) loadWorkspaceRoots();
   }
 
+  function showSelectedRoot() {
+    const source = state.workspaceMode === "companion" ? "Local folder" : "Server folder";
+    elements.selectedRoot.textContent = state.workspaceRoot ? `${source}: ${state.workspaceRoot}` : "No folder selected";
+  }
+
+  async function pairLocalCompanion() {
+    const code = elements.companionCode.value.trim();
+    if (!code) {
+      showToast("Enter the one-time pairing code printed by the local companion.", "error");
+      return;
+    }
+    elements.pairCompanion.disabled = true;
+    elements.companionStatus.textContent = "Pairing with local companion…";
+    try {
+      const data = await companionRequest("/pair", { code });
+      sessionStorage.setItem("model_council_companion_token", data.token);
+      elements.companionCode.value = "";
+      elements.pickLocalFolder.disabled = false;
+      elements.companionStatus.textContent = "Connected to local companion. Select a folder to begin.";
+      showToast("Local companion paired with this browser tab.");
+    } catch (error) {
+      elements.companionStatus.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      elements.pairCompanion.disabled = false;
+    }
+  }
+
+  async function checkLocalCompanion() {
+    if (!companionToken()) return;
+    try {
+      const data = await companionRequest("/status", undefined, "GET");
+      elements.pickLocalFolder.disabled = false;
+      elements.companionStatus.textContent = "Local companion connected";
+      if (data.root) {
+        state.workspaceMode = "companion";
+        state.companionRoot = data.root;
+        state.workspaceRoot = data.root;
+        showSelectedRoot();
+      }
+    } catch (error) {
+      sessionStorage.removeItem("model_council_companion_token");
+      elements.pickLocalFolder.disabled = true;
+      elements.companionStatus.textContent = error.message;
+    }
+  }
+
+  async function pickLocalWorkspace() {
+    elements.pickLocalFolder.disabled = true;
+    elements.companionStatus.textContent = "Choose a folder in the local picker…";
+    try {
+      const data = await companionRequest("/pick", {});
+      if (data.selected) {
+        state.workspaceMode = "companion";
+        state.companionRoot = data.root;
+        state.workspaceRoot = data.root;
+        elements.companionStatus.textContent = "Local folder selected";
+        showSelectedRoot();
+        resetWorkspaceView();
+      } else {
+        elements.companionStatus.textContent = data.root ? "Folder selection cancelled; previous folder kept." : "Folder selection cancelled.";
+      }
+    } catch (error) {
+      elements.companionStatus.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      elements.pickLocalFolder.disabled = !companionToken();
+    }
+  }
+
+  function useServerWorkspace() {
+    state.workspaceMode = "server";
+    state.workspaceRoot = elements.workspaceRootSelect.value;
+    showSelectedRoot();
+    onRootChange();
+  }
+
   function shortenPath(path) {
     const segments = String(path).split("/").filter(Boolean);
     return segments.length > 2 ? `…/${segments.slice(-2).join("/")}` : path;
@@ -1318,7 +1461,7 @@
       const roots = Array.isArray(data.roots) ? data.roots : [];
       elements.workspaceRootSelect.replaceChildren();
       if (!roots.length) {
-        state.workspaceRoot = "";
+        if (state.workspaceMode === "server") state.workspaceRoot = "";
         elements.workspaceRootSelect.disabled = true;
         const option = document.createElement("option");
         option.textContent = data.error || "No workspace configured";
@@ -1332,13 +1475,14 @@
         option.textContent = shortenPath(entry.path) + (entry.exists ? "" : " (missing)");
         elements.workspaceRootSelect.append(option);
       }
-      if (!roots.some((entry) => entry.path === state.workspaceRoot)) {
-        state.workspaceRoot = roots[0].path;
+      if (state.workspaceMode === "server") {
+        if (!roots.some((entry) => entry.path === state.workspaceRoot)) state.workspaceRoot = roots[0].path;
+        elements.workspaceRootSelect.value = state.workspaceRoot;
+        elements.workspaceRootSelect.title = state.workspaceRoot;
+        showSelectedRoot();
       }
-      elements.workspaceRootSelect.value = state.workspaceRoot;
-      elements.workspaceRootSelect.title = state.workspaceRoot;
     } catch (_) {
-      state.workspaceRoot = "";
+      if (state.workspaceMode === "server") state.workspaceRoot = "";
       elements.workspaceRootSelect.disabled = true;
       elements.workspaceRootSelect.replaceChildren();
       const option = document.createElement("option");
@@ -1348,8 +1492,14 @@
   }
 
   function onRootChange() {
+    state.workspaceMode = "server";
     state.workspaceRoot = elements.workspaceRootSelect.value;
     elements.workspaceRootSelect.title = state.workspaceRoot;
+    showSelectedRoot();
+    resetWorkspaceView();
+  }
+
+  function resetWorkspaceView() {
     elements.workspaceTree.replaceChildren();
     const empty = document.createElement("p");
     empty.className = "muted";
@@ -1363,7 +1513,9 @@
     elements.loadTree.disabled = true;
     elements.loadTree.textContent = "Loading…";
     try {
-      const data = await request("/api/workspace/tree", { root: state.workspaceRoot });
+      const data = state.workspaceMode === "companion"
+        ? await companionRequest("/workspace/list_tree", { path: "" })
+        : await request("/api/workspace/tree", { root: state.workspaceRoot });
       renderTree(data);
     } catch (error) {
       showToast(error.message || "Could not load the file tree.", "error");
@@ -1443,7 +1595,9 @@
 
   async function openWorkspaceFile(path, offset) {
     try {
-      const blob = await request("/api/workspace/read", { path, offset: offset || 1, root: state.workspaceRoot });
+      const blob = state.workspaceMode === "companion"
+        ? await companionRequest("/workspace/read_file", { path, offset: offset || 1 })
+        : await request("/api/workspace/read", { path, offset: offset || 1, root: state.workspaceRoot });
       renderFileViewer(blob);
     } catch (error) {
       showToast(error.message || "Could not open the file.", "error");
@@ -1467,7 +1621,9 @@
     const query = elements.workspaceSearch.value.trim();
     if (!query) return;
     try {
-      const data = await request("/api/workspace/search", { query, root: state.workspaceRoot });
+      const data = state.workspaceMode === "companion"
+        ? await companionRequest("/workspace/search", { query })
+        : await request("/api/workspace/search", { query, root: state.workspaceRoot });
       const container = document.createElement("div");
       container.className = "tree-body";
       const heading = document.createElement("p");
@@ -1511,6 +1667,7 @@
     state.agentRunning = busy;
     elements.runAgent.disabled = busy;
     elements.agentProvider.disabled = busy;
+    elements.fullAccessToggle.disabled = busy;
     elements.runAgent.classList.toggle("is-loading", busy);
     elements.runAgent.querySelector(".button-label").textContent = busy ? "Agent working" : "Run coder agent";
     elements.cancelAgent.hidden = !busy;
@@ -1597,7 +1754,7 @@
       const strong = document.createElement("strong");
       strong.textContent = "Command";
       const command = document.createElement("code");
-      command.textContent = Array.isArray(event.command) ? event.command.join(" ") : "";
+      command.textContent = typeof event.command === "string" ? event.command : Array.isArray(event.command) ? event.command.join(" ") : "";
       head.append(strong, command);
       card.append(head);
       if (event.probe_url) {
@@ -1726,7 +1883,7 @@
     const head = document.createElement("div");
     head.className = "terminal-head";
     const command = document.createElement("code");
-    command.textContent = `$ ${(event.command || []).join(" ")}`;
+    command.textContent = `$ ${typeof event.command === "string" ? event.command : (event.command || []).join(" ")}`;
     const exit = document.createElement("span");
     exit.className = "terminal-exit";
     exit.textContent = `exit ${event.returncode} · ${formatDuration(event.duration_ms)}`;
@@ -1737,6 +1894,54 @@
     wrap.append(head, pre);
     elements.agentFeed.append(wrap);
     wrap.scrollIntoView({ block: "nearest" });
+  }
+
+  async function loadPendingPlan() {
+    try {
+      const response = await fetch("/api/agent/pending-plan", { credentials: "same-origin" });
+      if (!response.ok) return;
+      const pending = await response.json();
+      if (!pending.pending) return;
+      state.pendingPausedPlan = pending;
+      elements.pendingPlanSummary.textContent = `${pending.task || "Coding task"} · ${pending.root || "workspace"}. Review the saved plan before resuming.`;
+      elements.pendingPlanCard.hidden = false;
+    } catch (_) {
+      // A pending plan is optional; normal app startup remains available offline.
+    }
+  }
+
+  async function decidePendingPlan(decision) {
+    const pending = state.pendingPausedPlan;
+    if (!pending) return;
+    const buttons = [elements.pendingPlanApprove, elements.pendingPlanReject, elements.pendingPlanDiscard];
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      const response = await fetch(`/api/agent/pending-plan/${encodeURIComponent(pending.plan_id)}/decision`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || result.detail || "Could not update the paused plan.");
+      if (decision === "approve") {
+        state.workspaceMode = pending.workspace_mode || "server";
+        state.workspaceRoot = pending.root || "";
+        elements.codeTask.value = pending.task || "";
+        elements.agentMaxSteps.value = String(pending.max_steps || 20);
+        elements.agentProvider.value = pending.agent_provider || "";
+        state.resumePlanId = pending.plan_id;
+        elements.pendingPlanSummary.textContent = "Plan approved. Resuming the coding run…";
+        await runAgent();
+      } else {
+        elements.pendingPlanCard.hidden = true;
+        state.pendingPausedPlan = null;
+        showToast(decision === "reject" ? "Paused plan rejected." : "Paused plan discarded.");
+      }
+    } catch (error) {
+      showToast(error.message || "Could not update the paused plan.", "error");
+      buttons.forEach((button) => { button.disabled = false; });
+    }
   }
 
   async function runAgent() {
@@ -1750,7 +1955,7 @@
     if (!state.workspaceRoot) {
       await loadWorkspaceRoots();
       if (!state.workspaceRoot) {
-        showToast("No workspace folder. Set MODEL_COUNCIL_WORKSPACE_ROOT or create the default workspace/ folder.", "error");
+        showToast("Select a local folder with the companion or choose a configured server workspace.", "error");
         return;
       }
     }
@@ -1767,6 +1972,7 @@
     state.pendingDiffCard = null;
     elements.agentFeed.replaceChildren();
     elements.agentSummaryCard.hidden = true;
+    elements.agentSummaryMeta.replaceChildren();
     elements.agentStreamText.replaceChildren();
     elements.agentStream.open = false;
     elements.agentActivity.hidden = false;
@@ -1778,17 +1984,24 @@
         action: "code_task",
         task,
         root: state.workspaceRoot,
+        workspace_mode: state.workspaceMode,
         max_steps: Number(elements.agentMaxSteps.value),
         agent_provider: agentProvider,
+        full_access: state.fullAccess,
+        ...(state.resumePlanId ? { resume_plan_id: state.resumePlanId } : {}),
         providers: { [agentProvider]: agentConfig },
       }, (event) => {
         if (event.type === "agent_start") {
+          if (state.resumePlanId) {
+            elements.pendingPlanCard.hidden = true;
+            state.pendingPausedPlan = null;
+          }
           state.agentRoundId = event.round_id || "";
           state.workspaceRoot = event.root || state.workspaceRoot;
-          if (elements.workspaceRootSelect.value !== state.workspaceRoot) {
+          if (state.workspaceMode === "server" && elements.workspaceRootSelect.value !== state.workspaceRoot) {
             elements.workspaceRootSelect.value = state.workspaceRoot;
           }
-          elements.workspaceRootSelect.title = state.workspaceRoot;
+          showSelectedRoot();
           elements.agentRunTitle.textContent = `Agent · ${event.provider_label || providerLabels[event.provider] || "model"} · ${event.model || ""}`;
         } else if (event.type === "agent_delta") {
           if (!state.agentStopped) elements.agentStreamText.append(document.createTextNode(event.delta || ""));
@@ -1807,6 +2020,25 @@
             const note = card.querySelector(".confirm-note");
             if (note) note.textContent = event.message || "Please enter a plan before approving.";
             card.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+          }
+        } else if (event.type === "agent_plan_paused") {
+          setAgentStatus("pending", "Paused for review");
+          showToast("The plan was saved for approval on the next start.");
+        } else if (event.type === "agent_auto_approved") {
+          if (event.kind === "write" && state.pendingDiffCard) {
+            state.pendingDiffCard.classList.remove("is-pending");
+            state.pendingDiffCard.classList.add("is-approved");
+            state.pendingDiffCard = null;
+          }
+          if (event.kind === "command") {
+            const card = document.createElement("div");
+            card.className = "agent-diff-card is-approved";
+            const label = document.createElement("strong");
+            label.textContent = event.reason || "Command auto-approved";
+            const code = document.createElement("code");
+            code.textContent = event.command || "";
+            card.append(label, code);
+            elements.agentFeed.append(card);
           }
         } else if (event.type === "agent_confirm") {
           attachConfirm(event);
@@ -1830,29 +2062,40 @@
     } finally {
       setAgentBusy(false);
       closeOpenConfirms();
+      state.resumePlanId = "";
     }
   }
 
   function finishAgentRun(data) {
-    const status = data.cancelled ? "cancelled" : data.plan_status === "rejected" ? "rejected" : data.ok ? "complete" : "error";
-    const label = data.cancelled ? "Stopped" : data.plan_status === "rejected" ? "Plan rejected" : data.ok ? "Completed" : "Ended";
+    const status = data.plan_status === "paused" ? "pending" : data.cancelled ? "cancelled" : data.plan_status === "rejected" ? "rejected" : data.ok ? "complete" : "error";
+    const label = data.plan_status === "paused" ? "Paused for approval" : data.cancelled ? "Stopped" : data.plan_status === "rejected" ? "Plan rejected" : data.ok ? "Completed" : "Ended";
     setAgentStatus(status, label);
     const meta = [];
-    if (Array.isArray(data.steps)) meta.push(`${data.steps.length} step${data.steps.length === 1 ? "" : "s"}`);
+    if (Array.isArray(data.steps)) meta.push(["Steps", String(data.steps.length)]);
     if (Array.isArray(data.applied_changes) && data.applied_changes.length) {
-      meta.push(`applied: ${data.applied_changes.join(", ")}`);
+      meta.push(["Files changed", data.applied_changes.join(", ")]);
     }
-    if (data.session_log) meta.push(`session log: ${data.session_log}`);
-    if (data.session_log_error) meta.push(data.session_log_error);
+    if (data.session_log) meta.push(["Session log", data.session_log]);
+    if (data.session_log_error) meta.push(["Log notice", data.session_log_error]);
     if (data.usage && Number.isFinite(data.usage.eval_count)) {
-      meta.push(`${data.usage.eval_count.toLocaleString()} output tokens`);
+      meta.push(["Output", `${data.usage.eval_count.toLocaleString()} tokens`]);
     }
-    if (Number.isFinite(data.elapsed_ms)) meta.push(formatDuration(data.elapsed_ms));
+    if (Number.isFinite(data.elapsed_ms)) meta.push(["Duration", formatDuration(data.elapsed_ms)]);
     elements.agentSummaryCard.hidden = false;
-    const body = [data.summary || "The agent ended without a summary.", meta.join(" · ")]
-      .filter(Boolean)
-      .join("\n\n");
-    renderMarkdown(elements.agentSummaryText, body);
+    renderMarkdown(elements.agentSummaryText, data.summary || "The agent ended without a summary.");
+    elements.agentSummaryMeta.replaceChildren(...meta.map(([label, value]) => {
+      const item = document.createElement("div");
+      item.className = "agent-summary-item";
+      const name = document.createElement("span");
+      name.className = "agent-summary-label";
+      name.textContent = label;
+      const detail = document.createElement("span");
+      detail.className = "agent-summary-value";
+      detail.textContent = value;
+      item.append(name, detail);
+      return item;
+    }));
+    if (data.plan_status === "paused") loadPendingPlan();
     if (data.session_log || (Array.isArray(data.applied_changes) && data.applied_changes.length)) loadTree();
   }
 
@@ -1930,6 +2173,9 @@
     elements.modeCouncil.addEventListener("click", () => switchMode("council"));
     elements.modeWorkspace.addEventListener("click", () => switchMode("workspace"));
     elements.workspaceRootSelect.addEventListener("change", onRootChange);
+    elements.pairCompanion.addEventListener("click", pairLocalCompanion);
+    elements.pickLocalFolder.addEventListener("click", pickLocalWorkspace);
+    elements.useServerWorkspace.addEventListener("click", useServerWorkspace);
     elements.loadTree.addEventListener("click", loadTree);
     elements.runSearch.addEventListener("click", runWorkspaceSearch);
     elements.workspaceSearch.addEventListener("keydown", (event) => {
@@ -1937,6 +2183,15 @@
     });
     elements.runAgent.addEventListener("click", runAgent);
     elements.cancelAgent.addEventListener("click", cancelAgent);
+    elements.fullAccessToggle.addEventListener("click", () => {
+      state.fullAccess = !state.fullAccess;
+      elements.fullAccessToggle.setAttribute("aria-pressed", String(state.fullAccess));
+      elements.fullAccessToggle.textContent = `Full access: ${state.fullAccess ? "on" : "off"}`;
+      elements.fullAccessToggle.classList.toggle("is-active", state.fullAccess);
+    });
+    elements.pendingPlanApprove.addEventListener("click", () => decidePendingPlan("approve"));
+    elements.pendingPlanReject.addEventListener("click", () => decidePendingPlan("reject"));
+    elements.pendingPlanDiscard.addEventListener("click", () => decidePendingPlan("discard"));
 
     // Memory event listeners
     if (elements.newSessionBtn) elements.newSessionBtn.addEventListener("click", newSession);
@@ -1967,4 +2222,6 @@
   updateQuestionCount();
   loadMemoryHistory();
   loadWorkspaceRoots();
+  loadPendingPlan();
+  checkLocalCompanion();
 })();

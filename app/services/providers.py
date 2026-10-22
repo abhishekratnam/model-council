@@ -11,6 +11,7 @@ from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
 from app.services.extractors import extract_openai_text, extract_anthropic_text, usage_fields
 from app.services.security import clean_ollama_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
+from app.llm.openrouter_client import chat_completion
 
 def call_openai(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     model = provider_model(config)
@@ -31,35 +32,12 @@ def call_openai(config: dict[str, Any], question: str, instructions: str, max_to
     return extract_openai_text(response), usage_fields(response, "openai")
 
 def call_openrouter(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
-    response = request_json(
-        "POST",
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={"Authorization": f"Bearer {str(config.get('api_key', '')).strip()}"},
-        payload={
-            "model": provider_model(config),
-            "messages": [
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": question},
-            ],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
+    text, response = chat_completion(
+        config=config,
+        messages=[{"role": "system", "content": instructions}, {"role": "user", "content": question}],
+        max_tokens=max_tokens,
+        temperature=temperature,
     )
-    choices = response.get("choices")
-    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, str):
-        text = content.strip()
-    elif isinstance(content, list):
-        text = "\n".join(
-            block["text"].strip()
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()
-        )
-    else:
-        text = ""
-    if not text:
-        raise ProviderError("OpenRouter returned no text output.")
     return text, usage_fields(response, "openrouter")
 
 def call_custom(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
@@ -333,33 +311,13 @@ def call_agent_messages(
         text = extract_openai_text(response)
         usage = usage_fields(response, provider)
     elif provider == "openrouter":
-        response = request_json(
-            "POST",
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {str(config.get('api_key', '')).strip()}"},
-            payload={
-                "model": provider_model(config),
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
+        text, response = chat_completion(
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
-        choices = response.get("choices")
-        message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            text = content.strip()
-        elif isinstance(content, list):
-            text = "\n".join(
-                block["text"].strip()
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()
-            )
-        else:
-            text = ""
         usage = usage_fields(response, provider)
-        if not text:
-            raise ProviderError("OpenRouter returned no text output.")
     elif provider == "anthropic":
         system_text = "\n\n".join(
             message["content"] for message in messages

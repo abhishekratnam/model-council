@@ -24,7 +24,7 @@
         </a>
         <div class="local-badge">
           <span class="pulse" aria-hidden="true"></span>
-          Local-first workspace
+            Your models, your workspace
         </div>
       </header>
 
@@ -40,7 +40,7 @@
           <span class="privacy-icon" aria-hidden="true">⌁</span>
           <div>
             <strong>Keys stay ephemeral</strong>
-            <p>They are sent only to this local server for a request—never saved to disk, storage, cookies, or logs.</p>
+            <p>They are sent to the Model Council server only for a request—never saved to browser storage, cookies, or application logs.</p>
           </div>
         </aside>
       </section>
@@ -414,13 +414,26 @@
                 <h2>Workspace code agent</h2>
               </div>
               <div class="root-picker">
-                <label class="root-picker-label" for="workspace-root-select">Root</label>
-                <select id="workspace-root-select" class="root-select" title="Sandboxed workspace root"></select>
+                <label class="root-picker-label" for="companion-code">Local folder</label>
+                <div class="companion-controls">
+                  <input id="companion-code" class="field-input field-input-small" type="password" autocomplete="off" placeholder="Companion pairing code" aria-label="Local companion pairing code" />
+                  <button id="pair-companion" class="quiet-button" type="button">Pair</button>
+                  <button id="pick-local-folder" class="quiet-button" type="button" disabled>Select folder</button>
+                </div>
+                <span id="companion-status" class="connection-note">Local companion not connected</span>
+                <div class="server-root-controls">
+                  <label class="root-picker-label" for="workspace-root-select">Server workspace (fallback)</label>
+                  <select id="workspace-root-select" class="root-select" title="Server workspace root"></select>
+                  <button id="use-server-workspace" class="quiet-button" type="button">Use server folder</button>
+                </div>
+                <span id="workspace-selected-root" class="muted" aria-live="polite">No folder selected</span>
               </div>
             </div>
             <p class="workspace-disclosure">
               Choose one enabled provider for the full coding run. Cloud providers receive task
-              and workspace context. Every file change and command waits for your explicit approval, and
+              and workspace context. With the local companion, files and commands stay on your computer;
+              the selected model still receives the context needed for the task. Approving the plan
+              pre-approves its listed files and commands. Other changes and commands wait for your approval.
               <strong>Stop</strong> halts the run at the next step boundary.
             </p>
 
@@ -474,6 +487,20 @@
                   </label>
                   <span class="muted">One enabled provider handles the plan and every coding step in each run.</span>
                 </div>
+                <div class="agent-mode-controls" aria-label="Agent approval modes">
+                  <span class="agent-mode-label" id="plan-mode-label">Plan mode: on</span>
+                  <button id="full-access-toggle" class="quiet-button" type="button" aria-pressed="false">Full access: off</button>
+                  <span class="muted">Full access auto-runs ordinary allowlisted commands. Network and outside-folder commands still ask; destructive commands remain blocked.</span>
+                </div>
+                <section id="pending-plan-card" class="pending-plan-card" hidden aria-live="polite">
+                  <strong>Paused plan needs a decision</strong>
+                  <p id="pending-plan-summary"></p>
+                  <div class="confirm-row">
+                    <button id="pending-plan-approve" class="confirm-approve" type="button">Approve & resume</button>
+                    <button id="pending-plan-reject" class="confirm-reject" type="button">Reject</button>
+                    <button id="pending-plan-discard" class="quiet-button" type="button">Discard</button>
+                  </div>
+                </section>
                 <div class="action-row">
                   <button id="cancel-agent" class="danger-button" type="button" hidden>
                     <span class="stop-icon" aria-hidden="true"></span>
@@ -499,8 +526,14 @@
                   </details>
                   <div id="agent-feed" class="agent-feed"></div>
                   <div id="agent-summary-card" class="final-answer agent-summary" hidden>
-                    <span class="final-kicker">AGENT RESULT</span>
-                    <div id="agent-summary-text" class="answer-text"></div>
+                    <div class="agent-summary-head">
+                      <div>
+                        <span class="final-kicker">AGENT RESULT</span>
+                        <h3>Run summary</h3>
+                      </div>
+                    </div>
+                    <div id="agent-summary-text" class="answer-text agent-summary-text"></div>
+                    <div id="agent-summary-meta" class="agent-summary-meta" aria-label="Run details"></div>
                   </div>
                 </section>
               </div>

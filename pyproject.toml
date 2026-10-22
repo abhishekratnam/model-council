@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-council"
+version = "0.1.0"
+description = "Local filesystem and command companion for the Model Council browser app"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn[standard]==0.34.0",
+  "starlette==0.46.1",
+  "requests==2.32.3",
+  "httpx==0.28.1",
+  "msal==1.31.1",
+  "Authlib==1.4.1",
+  "requests-oauthlib==2.0.0",
+  "itsdangerous==2.2.0",
+  "pydantic==2.10.6",
+  "pydantic-settings==2.8.1",
+  "redis==5.2.1",
+]
+
+[project.optional-dependencies]
+web = [
+  "redis==5.2.1",
+]
+dev = [
+  "httpx==0.28.1",
+  "pytest==8.3.5",
+  "pytest-asyncio==0.25.3",
+]
+
+[project.scripts]
+model-council-companion = "model_council_companion.server:main"
+
+[tool.setuptools.packages.find]
+include = ["model_council_companion*"]

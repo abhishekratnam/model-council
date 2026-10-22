@@ -25,14 +25,14 @@ You do **not** need to run the application with Docker Compose for local develop
 
 ```text
 model-council/
-├── static/
-│   ├── index.html
-│   ├── styles.css
-│   └── app.js
+├── app/
+│   ├── api/
+│   ├── services/
+│   └── static/
+├── model_council_companion/
 ├── Dockerfile
 ├── docker-compose.yml
-├── fastapi_server.py
-├── memory.py
+├── pyproject.toml
 ├── requirements.txt
 └── README.md
 ```
@@ -43,10 +43,10 @@ From the project directory:
 
 ```bash
 cd /path/to/model-council
-uv sync
+uv sync --extra web --extra dev
 ```
 
-The root `pyproject.toml` declares the application and test dependencies. `uv sync` installs them into the project environment; `uv run` then uses that environment automatically.
+The root `pyproject.toml` packages the local companion. The `web` and `dev` extras install the hosted app and test dependencies for repository development. `uv run` then uses that environment automatically.
 
 ## 2. Start Redis separately with Docker
 
@@ -122,7 +122,7 @@ MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
 MODEL_COUNCIL_WORKSPACE_ROOT=/absolute/path/to/any/codebase,/absolute/path/to/another/repo
 ```
 
-`MODEL_COUNCIL_WORKSPACE_ROOT` points Workspace mode (Section 9) at one or more codebase folders — separate several paths with commas. Each configured folder appears in the Workspace tab's **Root** picker, so switching codebases needs no restart. When the variable is empty, the code agent uses the `workspace/` folder inside this repository (created on demand). Browsers cannot browse your disk, so the picker only offers these server-configured roots and the server rejects anything outside the list.
+`MODEL_COUNCIL_WORKSPACE_ROOT` points server-side Workspace mode (Section 9) at one or more codebase folders — separate several paths with commas. Each configured folder appears in the Workspace tab's server fallback picker. When the variable is empty, the code agent uses the `workspace/` folder inside this repository (created on demand). To work on a browser user's computer while the app is hosted, use the local companion described below.
 
 Keep provider API keys out of source control. Add `.env` to `.gitignore` if it is not already there. The browser-supplied provider keys should remain request-scoped and should not be committed to the repository.
 
@@ -229,7 +229,7 @@ from the members panel (Ollama, OpenAI, OpenRouter, Claude, or Azure / custom). 
 plans and drives the run while the agent explores a sandboxed codebase, stages changes, and asks
 for approval before applying file edits or running commands.
 
-1. Open the **Workspace · code agent** tab next to *Council debate*.
+1. Open the **Workspace · code agent** tab next to *Council debate*. For a hosted app, start the local companion and pair it using the one-time terminal code, then click **Select folder**. Local deployments can instead choose a configured server workspace.
 2. Enable and configure one provider in the members panel, then select its model under **Agent model**. Only that one model handles the run.
 3. Browse the sandboxed file tree or search the code; click any file to read it with line numbers.
 4. Describe the task (e.g. "Add a `remove_item` function to `shop/cart.py` with a test, then run pytest") and press **Run coder agent**.
@@ -241,10 +241,25 @@ for approval before applying file edits or running commands.
 ### How it stays safe
 
 - **Path jail**: every path is resolved inside the workspace root; dotfiles (`.git`, `.env`), symlink escapes, binary files, and files over 120 KB are refused.
-- **Staged diffs**: `write_file`/`edit_file` only stage a diff. The server applies it after you click **Approve**, and `edit_file` re-validates at apply time.
-- **Command allowlist**: approved argv lists only, with no shell, destructive tokens, or shell operators; commands time out and output is truncated. Web startup probes are limited to loopback hosts and stop the temporary process after the response check.
+- **Staged diffs**: `write_file`/`edit_file` only stage a diff. The local companion or server applies it after you click **Approve**, and `edit_file` re-validates at apply time.
+- **Command approval**: shell commands can use pipes, redirects, and chaining. The command is shown for explicit approval, starts from the selected workspace directory, times out, and has capped output. Commands run with the local user's permissions and can access files outside that directory. Web startup probes are limited to loopback hosts and stop the temporary process after the response check.
 - **Bounded runs**: default 20 steps (max 40), per-step model timeout, 5-minute confirmation timeout, and a context-window trimmer for the selected model.
-- Commands run with the server's environment, so tools like `pytest` must be installed in the Python environment that runs the server.
+- With the local companion, commands run with the companion's environment, so tools such as `pytest` must be installed on the user's computer. With the server-side fallback, they must be installed in the server environment.
+
+### Use a folder on the browser user's computer
+
+For a hosted Model Council, each user can run the local companion on their own computer. It opens the operating system's folder chooser and carries out Workspace file and command operations inside the chosen folder. The web app and model orchestration remain hosted. The selected task and file context are sent through the hosted app to the configured model provider.
+
+Install the companion from PyPI on the user's computer, then start it with the exact origin of the hosted app:
+
+```bash
+python -m pip install model-council-companion
+model-council-companion --origin https://your-app.example.com
+```
+
+For local development from this repository, install with `python -m pip install -e .` and run `model-council-companion --origin http://127.0.0.1:8787`. Keep the companion terminal open. Copy the one-time pairing code printed there into **Workspace → Local folder → Pair**, then select a folder. The pairing token stays in the current browser tab and the companion listens only on loopback. Selecting **Use server folder** switches back to the existing server-side workspace. On Linux, install the platform's Tk package if the native folder chooser is unavailable.
+
+For hosted access, configure `MODEL_COUNCIL_ALLOWED_ORIGINS` on the app server for the app's own domain and put authentication and TLS in front of the hosted app. The companion separately allows only the origin passed to `--origin` and requires its pairing token for folder operations.
 
 ### Running Workspace mode in Docker
 
@@ -342,7 +357,7 @@ OLLAMA_ORIGINS="http://localhost:8787" ollama serve
 
 ```bash
 cd /path/to/model-council
-uv sync
+uv sync --extra web --extra dev
 uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 

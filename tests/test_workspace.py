@@ -72,9 +72,9 @@ def test_command_validation_and_execution(workspace_root: Path) -> None:
     assert result["timed_out"] is False
 
     with pytest.raises(CouncilError, match="not allowlisted"):
-        workspace.validate_command(["sh", "-c", "echo unsafe"])
-    with pytest.raises(CouncilError, match="shell operators"):
-        workspace.validate_command(["python3", "-c", "print(1); print(2)"])
+        workspace.validate_command("sh -c 'echo unsafe'")
+    assert workspace.validate_command("python3 -c 'print(1); print(2)'" ).startswith("python3")
+    assert workspace.validate_command("python3 -m pytest -q && npm test") == "python3 -m pytest -q && npm test"
 
 
 def test_server_probe_uses_fresh_loopback_port_and_stops_process(

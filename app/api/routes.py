@@ -12,8 +12,34 @@ from app.services import workspace
 from app.core.exceptions import CouncilError
 from app.core.config import DEFAULT_OLLAMA_BASE_URL, settings
 from app.core.memory import memory_store
+from app.session import decide_pending_plan, load_pending_plan
 
 router = APIRouter()
+
+
+@router.get("/agent/pending-plan")
+async def pending_agent_plan():
+    state = load_pending_plan()
+    if not state:
+        return {"pending": False}
+    return {"pending": state.get("status") in {"paused", "approved"}, "plan_id": state.get("plan_id"),
+            "status": state.get("status"), "task": state.get("task"), "plan": state.get("plan"),
+            "root": state.get("root"), "workspace_mode": state.get("workspace_mode"),
+            "agent_provider": state.get("agent_provider"), "max_steps": state.get("max_steps"),
+            "created_at": state.get("created_at")}
+
+
+@router.post("/agent/pending-plan/{plan_id}/decision")
+async def decide_agent_plan(plan_id: str, payload: dict):
+    decision = payload.get("decision") if isinstance(payload, dict) else None
+    try:
+        state = decide_pending_plan(plan_id, str(decision or ""))
+    except ValueError as error:
+        raise CouncilError(str(error)) from error
+    if not state:
+        raise CouncilError("That paused plan is no longer available.")
+    return {"plan_id": state["plan_id"], "status": state["status"],
+            "plan": state.get("plan", "")}
 
 
 @router.post("/council/cancel/{round_id}")

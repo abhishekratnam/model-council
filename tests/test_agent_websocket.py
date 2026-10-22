@@ -1,4 +1,6 @@
 import json
+import queue
+from threading import Event
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -159,5 +161,116 @@ def test_rejected_plan_stops_before_implementation(
     assert result["plan_status"] == "rejected"
     assert "no implementation actions" in result["summary"]
     assert result["steps"] == []
-    assert calls == 1
+    assert calls == 2
     assert not list(workspace_root.glob("*.py"))
+
+
+def test_unanswered_plan_is_saved_approved_and_resumed(
+    workspace_root: Path, monkeypatch, tmp_path: Path
+) -> None:
+    state_file = tmp_path / ".model_council" / "session_state.json"
+    monkeypatch.setattr("app.session.pending_plan_path", lambda: state_file)
+    monkeypatch.setattr(code_agent, "CODE_AGENT_PLAN_CONFIRM_TIMEOUT_SECONDS", 0)
+    responses = iter([
+        json.dumps({"plan": {"steps": ["Inspect files", "Run tests"], "files": [], "commands": []}}),
+        json.dumps({"action": "done", "summary": "Resumed and completed."}),
+    ])
+
+    def fake_model_call(config, messages, max_tokens, temperature, on_delta, **kwargs):
+        response = next(responses)
+        on_delta(response)
+        return response, {}
+
+    monkeypatch.setattr(code_agent, "call_ollama_messages", fake_model_call)
+    payload = _payload(workspace_root, "Resume the paused task")
+    with TestClient(app) as client:
+        paused = _run_until_complete(client, payload)
+        assert paused["plan_status"] == "paused"
+        assert state_file.is_file()
+        saved = json.loads(state_file.read_text())
+        assert saved["status"] == "paused"
+        assert "api_key" not in saved
+
+        listed = client.get("/api/agent/pending-plan").json()
+        assert listed["pending"] is True
+        approved = client.post(
+            f"/api/agent/pending-plan/{saved['plan_id']}/decision", json={"decision": "approve"}
+        )
+        assert approved.status_code == 200
+        resumed_payload = {**payload, "resume_plan_id": saved["plan_id"]}
+        resumed = _run_until_complete(client, resumed_payload)
+
+    assert resumed["ok"] is True
+    assert resumed["plan_status"] == "approved"
+    assert resumed["summary"] == "Resumed and completed."
+    assert not state_file.exists()
+
+
+def test_approved_scope_and_full_access_auto_run_only_allowed_actions(
+    workspace_root: Path, monkeypatch
+) -> None:
+    events = []
+    rpc_queue = queue.Queue()
+    monkeypatch.setattr(
+        code_agent.workspace,
+        "run_command",
+        lambda command, root, probe_url=None: {
+            "command": command, "stdout": "ok", "stderr": "", "returncode": 0,
+            "duration_ms": 1, "truncated": False, "timed_out": False,
+        },
+    )
+    file_record = {"index": 1, "action": "write_file", "label": "Write file", "detail": ""}
+    text, error = code_agent._execute_action(
+        {"action": "write_file", "path": "planned.py", "content": "VALUE = 1\n"},
+        events.append, rpc_queue, Event(), [], [], file_record, str(workspace_root),
+        approval_scope=({"planned.py"}, set()),
+    )
+    assert not error
+    assert (workspace_root / "planned.py").read_text() == "VALUE = 1\n"
+    assert any(event.get("type") == "agent_auto_approved" and event.get("kind") == "write" for event in events)
+    assert not any(event.get("type") == "agent_confirm" for event in events)
+
+    events.clear()
+    command_record = {"index": 2, "action": "run_command", "label": "Run command", "detail": ""}
+    _, error = code_agent._execute_action(
+        {"action": "run_command", "command": "python3 -c 'print(1)'"},
+        events.append, rpc_queue, Event(), [], [], command_record, str(workspace_root),
+        approval_scope=(set(), set()), full_access=True,
+    )
+    assert not error
+    assert any(event.get("type") == "agent_auto_approved" and event.get("kind") == "command" for event in events)
+    assert not any(event.get("type") == "agent_confirm" for event in events)
+
+    events.clear()
+    _, error = code_agent._execute_action(
+        {"action": "run_command", "command": "python3 -c 'print(2)'"},
+        lambda event: (events.append(event), rpc_queue.put({
+            "rpc": "agent_confirm", "confirm_id": event.get("confirm_id"), "approved": True,
+        }) if event.get("type") == "agent_confirm" else None),
+        rpc_queue, Event(), [], [], command_record, str(workspace_root),
+        approval_scope=(set(), set()), full_access=False,
+    )
+    assert not error
+    assert any(event.get("type") == "agent_confirm" for event in events)
+    assert code_agent._command_needs_extra_approval(
+        "python3 -c 'from urllib.request import urlopen; urlopen(\"https://example.invalid\")'",
+        str(workspace_root),
+    )
+    assert code_agent._command_needs_extra_approval(
+        "python3 -c 'open(\"/etc/hosts\").read()'", str(workspace_root)
+    )
+
+
+def test_paused_plan_can_be_rejected_or_discarded(client, monkeypatch, tmp_path: Path) -> None:
+    state_file = tmp_path / ".model_council" / "session_state.json"
+    monkeypatch.setattr("app.session.pending_plan_path", lambda: state_file)
+    from app.session import save_paused_plan
+
+    for decision in ("reject", "discard"):
+        saved = save_paused_plan({"task": "A paused task", "plan": "## Steps\n1. Inspect"})
+        response = client.post(
+            f"/api/agent/pending-plan/{saved['plan_id']}/decision", json={"decision": decision}
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == ("rejected" if decision == "reject" else "discarded")
+        assert not state_file.exists()
