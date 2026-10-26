@@ -3,7 +3,7 @@
 These instructions apply to every supported project in this workspace **before**
 any language-specific guidance. Supported categories: `python`, `rust`,
 `golang`, `javascript` (JavaScript includes TypeScript). Mixed-language
-workspaces are expected; use the detection rules in §2 to pick the toolchain.
+workspaces are expected; use the detection rules in to pick the toolchain.
 
 ---
 
