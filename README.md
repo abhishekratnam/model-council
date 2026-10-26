@@ -1,386 +1,135 @@
-
-
-
 # Model Council
 
-Model Council is a local-first web app that asks OpenAI, OpenRouter, Claude, an Ollama model, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
+Model Council is a browser-based app with two modes:
 
-The application itself runs as a FastAPI service. For local development, Python dependencies are managed with `uv`, Uvicorn runs the FastAPI application, and Redis can run separately in Docker.
+- **Council** sends a question to multiple model providers independently. You choose which completed answers to give a chair model, which writes the final synthesis.
+- **Workspace** uses one selected model as a coding agent. It reviews a codebase, proposes a plan for your approval, stages file changes as diffs, and requests approval for commands and changes outside the approved plan.
 
-The application supports both host-native and Docker execution. 
+The app runs locally with FastAPI, or can be hosted so users can connect a local folder through the companion program. Provider credentials are entered in the browser and sent with requests; they are not configured as server environment variables.
 
 ## Requirements
 
-Install the following:
+- Python 3.10 or later
+- [`uv`](https://docs.astral.sh/uv/) for local development
+- Docker, if you want to run Redis or the app in a container
+- API credentials for the cloud providers you plan to use
+- [Ollama](https://ollama.com/) and a downloaded model if you want to use a local model
 
-- Python 3.10+
-- `uv`
-- Docker
-- API keys for any cloud providers you want to use
-- Ollama only if you want to use a local Ollama model
+Redis is optional. Without it, the app still runs, but conversation history and usage analytics that depend on Redis are unavailable.
 
-You do **not** need to run the application with Docker Compose for local development.
+## Run locally
 
-## Project layout
-
-```text
-model-council/
-├── app/
-│   ├── api/
-│   ├── services/
-│   └── static/
-├── model_council_companion/
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-├── requirements.txt
-└── README.md
-```
-
-## 1. Install dependencies with uv
-
-From the project directory:
+Install the project and development dependencies:
 
 ```bash
-cd /path/to/model-council
 uv sync --extra web --extra dev
 ```
 
-The root `pyproject.toml` packages the local companion. The `web` and `dev` extras install the hosted app and test dependencies for repository development. `uv run` then uses that environment automatically.
-
-## 2. Start Redis separately with Docker
-
-Run Redis as an independent container:
+Start the app from the repository root:
 
 ```bash
-docker run -d \
-  --name model-council-redis \
-  -p 6379:6379 \
-  redis:7
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
-Verify that the container is running:
+Open [http://localhost:8787](http://localhost:8787). The API health endpoint is [http://localhost:8787/api/health](http://localhost:8787/api/health).
+
+The default Redis URL is `redis://127.0.0.1:6379/0`. To enable Redis-backed history and analytics, run Redis separately, for example:
 
 ```bash
-docker ps
+docker run -d --name model-council-redis -p 6379:6379 redis:7
 ```
 
-You can also test Redis directly:
+To point the app at a different Redis instance, set `MODEL_COUNCIL_REDIS_URL` in `.env`. Other server settings include:
 
-```bash
-docker exec model-council-redis redis-cli ping
-```
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `MODEL_COUNCIL_REDIS_URL` | Redis connection for history and usage analytics | `redis://127.0.0.1:6379/0` |
+| `MODEL_COUNCIL_MEMORY_TTL` | History retention in seconds | `86400` |
+| `MODEL_COUNCIL_MEMORY_MAX_ROUNDS` | Maximum saved rounds per session | `8` |
+| `MODEL_COUNCIL_WORKSPACE_ROOT` | Server-side Workspace folders; separate multiple roots with commas | Repository `workspace/` folder |
+| `MODEL_COUNCIL_ALLOWED_ORIGINS` | Additional browser origins allowed by the server | Empty |
+| `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA` | Permit direct server connections to remote Ollama URLs | `false` |
+| `MODEL_COUNCIL_ALLOW_NETWORK` | Permit binding the app to a non-loopback address | `false` |
 
-Expected output:
+Keep `.env` and API credentials out of source control. The app refuses non-loopback binds unless `MODEL_COUNCIL_ALLOW_NETWORK=1` is set.
 
-```text
-PONG
-```
+## Providers and Council mode
 
-To stop Redis:
+The app supports OpenAI Responses, OpenRouter, Anthropic Messages, Ollama, Azure OpenAI, and compatible Responses API endpoints. Enable and configure providers in the browser UI. OpenRouter models can be refreshed and searched from the provider card; the Azure/custom card accepts a deployment or model, endpoint, and authentication settings.
 
-```bash
-docker stop model-council-redis
-```
+For each Council round, enabled providers answer independently and stream results as they complete. Failed or skipped members do not discard successful answers. Select one or more completed submissions and choose a chair to synthesize them. When members disagree, the chair reports the conflict and gives its own evidence-based synthesis. Redis enables saved conversation history between rounds.
 
-To start the existing container again:
+## Ollama
 
-```bash
-docker start model-council-redis
-```
+For a local Ollama server, start Ollama with the app origin allowed by its browser CORS policy. For local development:
 
-## 3. Configure environment variables
-
-Create or update your `.env` file with the values required by the application.
-
-### FastAPI running directly on the host
-
-When Uvicorn runs directly on your machine, use:
-
-```env
-MODEL_COUNCIL_REDIS_URL=redis://127.0.0.1:6379/0
-MODEL_COUNCIL_OLLAMA_URL=http://localhost:11434
-```
-
-### FastAPI running inside Docker
-
-When the FastAPI application runs inside Docker and Redis runs on the host machine, use Docker's host gateway for Redis:
-
-```env
-MODEL_COUNCIL_REDIS_URL=redis://host.docker.internal:6379/0
-MODEL_COUNCIL_OLLAMA_URL=http://localhost:11434
-```
-
-*Note: You do **not** need to use `host.docker.internal` for Ollama. Because Ollama requests are relayed through the user's browser (see Section 6), FastAPI does not need direct network access to Ollama.*
-
-For example, the application can also use:
-
-```env
-MODEL_COUNCIL_MEMORY_TTL=86400
-MODEL_COUNCIL_MEMORY_MAX_ROUNDS=8
-MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
-MODEL_COUNCIL_WORKSPACE_ROOT=/absolute/path/to/any/codebase,/absolute/path/to/another/repo
-```
-
-`MODEL_COUNCIL_WORKSPACE_ROOT` points server-side Workspace mode (Section 9) at one or more codebase folders — separate several paths with commas. Each configured folder appears in the Workspace tab's server fallback picker. When the variable is empty, the code agent uses the `workspace/` folder inside this repository (created on demand). To work on a browser user's computer while the app is hosted, use the local companion described below.
-
-Keep provider API keys out of source control. Add `.env` to `.gitignore` if it is not already there. The browser-supplied provider keys should remain request-scoped and should not be committed to the repository.
-
-## 4. Run the FastAPI application with Uvicorn
-
-Start the application from the project root:
-
-```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
-```
-
-Open:
-
-```text
-http://localhost:8787
-```
-
-For a non-reloading local process:
-
-```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787
-```
-
-## 5. Run Redis and FastAPI together
-
-You can start Redis first:
-
-```bash
-docker start model-council-redis 2>/dev/null || docker run -d --name model-council-redis -p 6379:6379 redis:7
-```
-
-Then start FastAPI in another terminal:
-
-```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
-```
-
-## 6. Ollama (Local BYOK & Browser Relay)
-
-Ollama is optional. Model Council uses a **WebSocket Browser Relay** to connect to local Ollama instances. 
-
-When a user enters `http://localhost:11434` (or `http://127.0.0.1:11434`) in the UI, council and Workspace mode send a WebSocket RPC message to the user's browser. The browser makes the request to local Ollama and streams the tokens back to the server. This keeps the same URL working when FastAPI runs inside Docker.
-
-This means **local Ollama works seamlessly whether the app is running on your host, in Docker, or deployed to a production cloud server.**
-
-### Setting up Ollama
-
-If Ollama is installed locally, start it. **Important:** By default, Ollama blocks web browser requests (CORS). You must explicitly tell Ollama to allow requests from the Model Council web app.
-
-**Mac/Linux:**
 ```bash
 OLLAMA_ORIGINS="http://localhost:8787" ollama serve
 ```
-*(Replace `http://localhost:8787` with your production domain, e.g., `https://your-app.com`, when deploying).*
 
-**Windows (PowerShell):**
-```powershell
-$env:OLLAMA_ORIGINS="http://localhost:8787"; ollama serve
-```
-
-Pull a model, for example:
+Pull a model, then in the UI set the Ollama server URL to `http://localhost:11434` and refresh the model list:
 
 ```bash
 ollama pull gemma4
 ```
 
-### UI Configuration
-In the Model Council UI, set the "Local server" URL to:
-```text
-http://localhost:11434
-```
-*(Note: In modern browsers, `http://localhost` is treated as a secure context, while `http://127.0.0.1` may be blocked as "Mixed Content" if the app is served over HTTPS. Prefer `localhost` for the UI input).*
+For local Ollama URLs, the browser relays requests over the app's WebSocket connection. This works when FastAPI is in Docker or hosted, because the browser user's machine contacts its own Ollama server. For a remote Ollama URL, the FastAPI server connects directly; set `MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1` only when that is intended. Use HTTPS for the hosted app and add its exact origin to `OLLAMA_ORIGINS` on the machine running Ollama.
 
-Use **Refresh** in the Ollama card in the UI to check installed models. If the application needs to connect to a remote Ollama server (e.g., via Ngrok or Tailscale), configure that URL explicitly. Remote URLs are called directly by the FastAPI server.
+## Workspace mode
 
-## 7. Provider configuration
+Workspace is a single-model coding agent, not a multi-model council. Select an enabled provider and model in **Agent model**, choose a folder, describe the task, and start a run.
 
-The first council round can use the enabled providers independently.
+### Plan and implementation flow
 
-Typical providers include:
-- OpenAI Responses API
-- OpenRouter Chat Completions API, with searchable model selection
-- Anthropic Messages API
-- Ollama
-- Azure OpenAI
-- OpenAI-compatible Responses API deployments
+1. The agent receives a bounded file tree, the task, project documentation, and the previous session handoff when available.
+2. It detects Python, Rust, Go, or JavaScript/TypeScript from project manifests and file extensions. If a workspace contains multiple supported languages, task references can select the target. If the category is still ambiguous, the plan asks you to add an explicit `Project category: python|rust|golang|javascript` choice before implementation.
+3. The agent reads Markdown project material through the selected workspace backend. It keeps shared agent rules and the selected language guide, selects task-relevant sections from workspace Markdown, removes duplicate content, and limits the context sent to the model. Workspace documents are treated as untrusted reference material.
+4. Review, edit, then approve or reject the generated plan. Paused plans can be resumed, discarded, or rejected from the app's plan controls.
+5. After approval, the agent explores and implements in bounded steps. Proposed file edits appear as diffs. Files and commands listed in the approved plan can proceed under that approval; out-of-plan edits and commands require another confirmation. You can stop a run at a step boundary.
+6. The agent performs a startup/preflight check before implementation and again after changes. For web apps, the check uses a fresh loopback port and stops the temporary server after checking its response.
+7. The run writes `.model_council/plans/last_session.md` in the selected workspace. Later runs receive it as untrusted historical context and verify its claims against current files.
 
-For Azure or a compatible Responses API endpoint, configure the provider through the UI rather than storing credentials in the repository.
+The agent defaults to 20 steps and allows up to 40. File browsing is bounded by tree depth and size; hidden paths, binary files, symlink escapes, and files over 120 KB are refused. Commands have a timeout and capped output and run with the permissions of the server process or local companion. A workspace path boundary does not sandbox shell commands from accessing other paths; review command approvals carefully.
 
-## 8. How a round works
+### Choose a workspace location
 
-1. The app sends the original question independently to each enabled council member.
-2. Responses are displayed as they arrive.
-3. Successful answers remain available even when another provider fails or is skipped.
-4. You select which completed answers should be used as evidence.
-5. The selected chair receives the original question plus the selected council submissions and produces the final synthesis.
+**Server folder:** With a local app, the default is the repository's `workspace/` folder. Set `MODEL_COUNCIL_WORKSPACE_ROOT` to one or more server-side folders to make them available in the Workspace folder picker. When the app runs in Docker, mount the target folder into the container and set the variable to its container path. Commands then run inside the container, so the required language runtimes and tools must be installed there.
 
-Ollama responses and Ollama-led synthesis stream through the application's WebSocket connection.
+**Local folder with the companion:** For a hosted app, the companion lets the browser app work with a folder on the user's computer. The companion serves only on loopback, checks the configured app origin, and requires a pairing token. File context and task prompts are sent through the hosted app to the selected model provider.
 
-## 9. Workspace mode (single-provider code agent)
-
-Workspace mode turns Model Council into a coding agent: choose one enabled provider and model
-from the members panel (Ollama, OpenAI, OpenRouter, Claude, or Azure / custom). That single model
-plans and drives the run while the agent explores a sandboxed codebase, stages changes, and asks
-for approval before applying file edits or running commands.
-
-1. Open the **Workspace · code agent** tab next to *Council debate*. For a hosted app, start the local companion and pair it using the one-time terminal code, then click **Select folder**. Local deployments can instead choose a configured server workspace.
-2. Enable and configure one provider in the members panel, then select its model under **Agent model**. Only that one model handles the run.
-3. Browse the sandboxed file tree or search the code; click any file to read it with line numbers.
-4. Describe the task (e.g. "Add a `remove_item` function to `shop/cart.py` with a test, then run pytest") and press **Run coder agent**.
-5. The agent drafts an implementation plan first. Review it in the plan editor, make changes if needed, then approve it to continue or reject it to stop before implementation.
-6. After approval, the agent reads project instructions and verifies the startup path. For web apps it starts the project on a fresh loopback port, checks that it responds, then stops that temporary process. After the requested changes, it repeats the check independently of any server already running on localhost.
-7. The agent streams one JSON action per step (`list_tree`, `search`, `read_file`, `write_file`, `edit_file`, `run_command`, `done`, `fail`). Every proposed change appears as a unified diff and every command as a terminal card — **nothing is written or executed until you approve it**. **Stop** halts the run at the next step boundary.
-8. After every run, `.model_council/plans/last_session.md` is updated at the selected workspace root, following the hidden plan-folder pattern used by tools such as ZCode. The next run receives that handoff alongside the current tree, then verifies its claims against the current files before editing.
-
-### How it stays safe
-
-- **Path jail**: every path is resolved inside the workspace root; dotfiles (`.git`, `.env`), symlink escapes, binary files, and files over 120 KB are refused.
-- **Staged diffs**: `write_file`/`edit_file` only stage a diff. The local companion or server applies it after you click **Approve**, and `edit_file` re-validates at apply time.
-- **Command approval**: shell commands can use pipes, redirects, and chaining. The command is shown for explicit approval, starts from the selected workspace directory, times out, and has capped output. Commands run with the local user's permissions and can access files outside that directory. Web startup probes are limited to loopback hosts and stop the temporary process after the response check.
-- **Bounded runs**: default 20 steps (max 40), per-step model timeout, 5-minute confirmation timeout, and a context-window trimmer for the selected model.
-- With the local companion, commands run with the companion's environment, so tools such as `pytest` must be installed on the user's computer. With the server-side fallback, they must be installed in the server environment.
-
-### Use a folder on the browser user's computer
-
-For a hosted Model Council, each user can run the local companion on their own computer. It opens the operating system's folder chooser and carries out Workspace file and command operations inside the chosen folder. The web app and model orchestration remain hosted. The selected task and file context are sent through the hosted app to the configured model provider.
-
-Install the companion from PyPI on the user's computer, then start it with the exact origin of the hosted app:
+Install and start the companion on the computer that has the folder:
 
 ```bash
 python -m pip install model-council-companion
 model-council-companion --origin https://your-app.example.com
 ```
 
-For local development from this repository, install with `python -m pip install -e .` and run `model-council-companion --origin http://127.0.0.1:8787`. Keep the companion terminal open. Copy the one-time pairing code printed there into **Workspace → Local folder → Pair**, then select a folder. The pairing token stays in the current browser tab and the companion listens only on loopback. Selecting **Use server folder** switches back to the existing server-side workspace. On Linux, install the platform's Tk package if the native folder chooser is unavailable.
-
-For hosted access, configure `MODEL_COUNCIL_ALLOWED_ORIGINS` on the app server for the app's own domain and put authentication and TLS in front of the hosted app. The companion separately allows only the origin passed to `--origin` and requires its pairing token for folder operations.
-
-### Running Workspace mode in Docker
-
-Two things change when the app runs in a container:
-
-1. **Ollama is on the host.** Keep the UI's "Local server" field set to `http://localhost:11434` (or `http://127.0.0.1:11434`). Council and Workspace requests are relayed through the browser, so the URL points to the host Ollama even when FastAPI runs inside Docker. `host.docker.internal` is only needed if you intentionally configure a direct server-to-Ollama connection.
-2. **The workspace folder must be mounted into the container** and commands run *inside* the container. Set `MODEL_COUNCIL_WORKSPACE_ROOT=/workspace` and mount your codebase at `/workspace` (see the commented volume in `docker-compose.yml`); `pytest`/`python` must exist in the image's environment.
-
-For the smoothest Workspace-mode experience, run the app host-native (`uv run` / `.venv`) — Ollama, your codebase, and your Python tools are then all in the same environment.
-
-Feasibility note: `qwen3-coder:30b` (MoE, ~3B active parameters, Q4_K_M ≈ 17 GB) runs comfortably on a 24 GB Apple-Silicon Mac when the context window is kept at ~16k tokens; `qwen3-coder:next`-class 80B models need ≥32 GB.
-
-## 10. Health check
-
-Once the server is running, verify the API:
+Keep the terminal open. In **Workspace → Local folder**, enter the one-time pairing code printed in the terminal, pair the browser, then choose a folder. For local app development, install the package from this repository with `python -m pip install -e .` and run:
 
 ```bash
-curl http://localhost:8787/api/health
+model-council-companion --origin http://127.0.0.1:8787
 ```
 
-## 11. Run tests
+On Linux, the operating system's Tk package may be needed for the folder chooser. The companion runs commands with the local user's permissions; use it only with folders and commands you trust.
 
-Run the integration suite with:
+## Docker Compose
+
+The included Compose file runs the web app and expects Redis on the host by default. Start it with:
+
+```bash
+docker compose up --build
+```
+
+The Compose configuration publishes port `8787`, binds the app to the container interface, and sets the network-bind opt-in. For server-side Workspace access to another codebase, uncomment and configure the workspace volume and `MODEL_COUNCIL_WORKSPACE_ROOT` entries in `docker-compose.yml`. Ollama running on the browser user's machine can still use the browser relay at `http://localhost:11434`.
+
+For a hosted deployment, put TLS and authentication in front of the app, configure `MODEL_COUNCIL_ALLOWED_ORIGINS` for the app's browser origin, and set appropriate Ollama origins on users' local Ollama installations. The app is designed for local-first use and does not provide user authentication itself.
+
+## Tests
+
+Install development dependencies if you have not already, then run:
 
 ```bash
 uv run pytest tests -v
 ```
 
-The default `dev` dependency group includes pytest and its HTTP test client. Tests use mocked model providers and do not require real API keys, Redis, Ollama, or a separately running app server.
-
-## 12. Docker Compose
-
-`docker-compose.yml` can be used when you want the application itself containerized.
-
-When FastAPI runs inside Docker while Redis runs on the host, use:
-
-```text
-FastAPI container
-    │
-    └── redis://host.docker.internal:6379/0
-```
-
-*Note: Ollama does not need to be mapped here because the browser handles Ollama requests directly.*
-
-For normal host-native local development, use:
-
-```text
-FastAPI / Uvicorn
-    │
-    ├── redis://127.0.0.1:6379/0
-    │
-    └── Browser Relay -> http://localhost:11434 (Ollama)
-```
-
-If Redis is another container on the same Docker network, use the Redis service name:
-
-```text
-redis://redis:6379/0
-```
-
-## 13. Security notes
-
-The application is designed primarily as a local-first application.
-
-For local development:
-- Bind the FastAPI server to `127.0.0.1`.
-- Do not expose the application directly to the public internet without TLS.
-- Do not commit provider API keys.
-
-For production deployment:
-- Use an authenticated reverse proxy and TLS before exposing the application to other users.
-- Because users can enter provider API keys in the browser, public deployment requires additional authentication and network controls.
-- Users connecting local Ollama must run it with `OLLAMA_ORIGINS="https://your-production-domain.com" ollama serve`.
-
-## Quick start
-
-For a fresh local setup:
-
-### Terminal 1 — Redis
-
-```bash
-docker run -d \
-  --name model-council-redis \
-  -p 6379:6379 \
-  redis:7
-```
-
-### Terminal 2 — Ollama
-
-```bash
-OLLAMA_ORIGINS="http://localhost:8787" ollama serve
-```
-
-### Terminal 3 — FastAPI
-
-```bash
-cd /path/to/model-council
-uv sync --extra web --extra dev
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
-```
-
-For this host-native setup, your `.env` should point to:
-
-```env
-MODEL_COUNCIL_REDIS_URL=redis://127.0.0.1:6379/0
-MODEL_COUNCIL_OLLAMA_URL=http://localhost:11434
-```
-
-Then open:
-
-```text
-http://localhost:8787
-```
-
-## Running the test suite
-
-With uv, install and run the suite using the commands above. For a pip-managed virtual environment, install the development requirements and run pytest:
-
-```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest tests -v
-```
-
-The server preflight test starts its own short-lived HTTP server on a free loopback port.
+The tests mock model-provider calls and do not require real provider credentials, Redis, or Ollama.

@@ -95,7 +95,7 @@ directories, and install nothing outside the approved plan.
 Machine-readable contracts consumed by the agent runtime. Filenames are
 normalized to lowercase before matching `FILE_SIGNALS`.
 
-```python
+```
 GUIDES_DIR = Path(__file__).resolve().parents[2] / "plans"
 SUPPORTED_LANGUAGES = ("python", "rust", "golang", "javascript")
 
