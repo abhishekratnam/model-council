@@ -1,8 +1,27 @@
+import importlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 import app.companion as companion
+from model_council_companion import runtime, workspace
+
+
+def test_workspace_probe_validation_uses_standalone_companion_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    companion_error = runtime.CompanionError
+    monkeypatch.delattr(workspace, "CouncilError", raising=False)
+    monkeypatch.setattr(runtime, "CouncilError", companion_error)
+    importlib.reload(workspace)
+
+    with pytest.raises(companion_error, match=r"must include the \{port\} placeholder"):
+        workspace._run_server_probe(
+            "python3 -m http.server 8000 --bind 127.0.0.1",
+            tmp_path,
+            "http://{host}:{port}/",
+        )
 
 
 def test_companion_pairing_and_selected_folder_operations(tmp_path: Path, monkeypatch) -> None:
@@ -25,6 +44,19 @@ def test_companion_pairing_and_selected_folder_operations(tmp_path: Path, monkey
     selected = client.post("/pick", headers=auth_headers)
     assert selected.status_code == 200
     assert selected.json() == {"selected": True, "root": str(selected_root)}
+
+    invalid_probe = client.post(
+        "/workspace/run_command",
+        headers=auth_headers,
+        json={
+            "command": "python3 -m http.server 8000 --bind 127.0.0.1",
+            "probe_url": "http://{host}:{port}/",
+        },
+    )
+    assert invalid_probe.status_code == 400
+    assert invalid_probe.json() == {
+        "error": "A server probe command must include the {port} placeholder."
+    }
 
     tree = client.post("/workspace/list_tree", headers=auth_headers, json={})
     assert tree.status_code == 200

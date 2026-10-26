@@ -34,7 +34,17 @@ def test_agent_websocket_creates_and_resumes_session_handoff(
     workspace_root: Path, monkeypatch
 ) -> None:
     (workspace_root / "main.py").write_text("print('hello')\n")
+    (workspace_root / "README.md").write_text(
+        "# Example\n\n## Local development\nUse the documented localhost server.\n"
+    )
     calls: list[list[dict[str, str]]] = []
+    markdown_reads: list[str] = []
+    original_read_file = code_agent.workspace.read_file
+
+    def track_markdown_read(path, *args, **kwargs):
+        if str(path).casefold().endswith((".md", ".markdown")):
+            markdown_reads.append(str(path))
+        return original_read_file(path, *args, **kwargs)
     responses = iter([
         json.dumps({"plan": ["Inspect the entry point", "Run the documented startup check"]}),
         json.dumps({"action": "done", "summary": "Baseline inspected."}),
@@ -49,6 +59,7 @@ def test_agent_websocket_creates_and_resumes_session_handoff(
         return response, {"prompt_eval_count": 10, "eval_count": 5}
 
     monkeypatch.setattr(code_agent, "call_ollama_messages", fake_model_call)
+    monkeypatch.setattr(code_agent.workspace, "read_file", track_markdown_read)
 
     def approve_plan(event, websocket):
         if event.get("type") == "agent_plan":
@@ -82,9 +93,61 @@ def test_agent_websocket_creates_and_resumes_session_handoff(
     assert "main.py" in first_plan_prompt
     assert "PREVIOUS AGENT SESSION LOG" in first_plan_prompt
     assert "No previous agent session log" in first_plan_prompt
+    assert "PROJECT CATEGORY: python" in first_plan_prompt
+    assert "Python project guidance" in first_plan_prompt
+    assert "PROJECT CATEGORY: python" in first_action_prompt
+    assert "Python project guidance" in first_action_prompt
     assert "USER-APPROVED IMPLEMENTATION PLAN" in first_action_prompt
     assert "Keep the existing public API compatible" in first_action_prompt
     assert "Baseline inspected." in resumed_plan_prompt
+    assert "Use the documented localhost server." in first_plan_prompt
+    assert "Use the documented localhost server." in first_action_prompt
+    assert markdown_reads == ["README.md", "README.md"]
+
+
+def test_agent_websocket_stops_when_mixed_project_category_is_unresolved(
+    workspace_root: Path, monkeypatch
+) -> None:
+    (workspace_root / "Cargo.toml").write_text("[package]\nname = 'sample'\n")
+    (workspace_root / "src").mkdir()
+    (workspace_root / "src" / "main.rs").write_text("fn main() {}\n")
+    (workspace_root / "package.json").write_text('{"scripts": {}}\n')
+    (workspace_root / "web").mkdir()
+    (workspace_root / "web" / "app.tsx").write_text("export default function App() {}\n")
+
+    calls: list[list[dict[str, str]]] = []
+
+    def fake_model_call(config, messages, max_tokens, temperature, on_delta, **kwargs):
+        calls.append([message.copy() for message in messages])
+        response = json.dumps({"plan": [
+            "Ask the user to select a project category",
+            "Wait for an explicit category in the reviewed plan",
+        ]})
+        on_delta(response)
+        return response, {}
+
+    monkeypatch.setattr(code_agent, "call_ollama_messages", fake_model_call)
+
+    def approve_without_category(event, websocket):
+        if event.get("type") == "agent_plan":
+            websocket.send_json({
+                "rpc": "agent_plan_review",
+                "review_id": event["review_id"],
+                "approved": True,
+                "plan": event["plan"],
+            })
+
+    with TestClient(app) as client:
+        result = _run_until_complete(
+            client, _payload(workspace_root, "Improve the project"), approve_without_category
+        )
+
+    assert result["ok"] is False
+    assert result["plan_status"] == "clarification_required"
+    assert "still ambiguous" in result["summary"]
+    assert len(calls) == 1
+    assert "PROJECT CATEGORY: ambiguous" in calls[0][1]["content"]
+    assert "candidate categories are javascript, rust" in calls[0][1]["content"]
 
 
 def test_agent_websocket_stages_and_applies_approved_file_change(

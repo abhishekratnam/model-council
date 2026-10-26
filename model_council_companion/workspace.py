@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from model_council_companion.runtime import (
+    CouncilError,
     settings,
     WORKSPACE_MAX_TREE_ENTRIES,
     WORKSPACE_MAX_TREE_DEPTH,
@@ -51,7 +52,7 @@ BINARY_SUFFIXES = {
 ALLOWED_COMMAND_EXECUTABLES = {
     "python", "python3", "pytest", "ruff", "pip", "uv",
     "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
-    "go", "cargo", "ruby", "php",
+    "go", "cargo",
 }
 FORBIDDEN_COMMAND_TOKENS = {"sudo", "rm", "shutdown", "reboot", "kill", "mkfs", "dd"}
 
