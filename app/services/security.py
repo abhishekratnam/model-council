@@ -4,7 +4,7 @@ import ipaddress
 import urllib.parse
 from typing import Any
 from app.core.exceptions import CouncilError
-from app.core.config import settings, DEFAULT_OLLAMA_BASE_URL, PROVIDER_LABELS
+from app.core.config import settings, DEFAULT_OLLAMA_BASE_URL, DEFAULT_EXO_BASE_URL, PROVIDER_LABELS
 from app.services.validation import trim_text
 
 def scrub_secrets(value: str) -> str:
@@ -90,6 +90,19 @@ def clean_ollama_base_url(value: Any) -> str:
             "Set MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1 only if you intentionally need a remote server."
         )
     path = "" if parsed.path.rstrip("/") == "/api" else parsed.path.rstrip("/")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def clean_exo_base_url(value: Any) -> str:
+    raw = trim_text(value if value is not None else DEFAULT_EXO_BASE_URL, field="exo URL", limit=300, required=True)
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise CouncilError("exo URL must be an http:// or https:// server address without credentials or query parameters.")
+    if parsed.path.rstrip("/") not in {"", "/v1"}:
+        raise CouncilError("Use the exo server address, not a specific API endpoint.")
+    if not settings.MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA and not is_loopback_host(parsed.hostname):
+        raise CouncilError("exo URL must use localhost or a loopback address. Set MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1 only if you intentionally need a remote server.")
+    path = "" if parsed.path.rstrip("/") == "/v1" else parsed.path.rstrip("/")
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 def provider_config(payload: dict[str, Any], provider: str) -> dict[str, Any]:
@@ -198,6 +211,11 @@ def provider_ready(provider: str, config: dict[str, Any], *, require_enabled: bo
     if provider == "ollama":
         try:
             clean_ollama_base_url(config.get("base_url"))
+        except CouncilError as error:
+            return str(error)
+    if provider == "exo":
+        try:
+            clean_exo_base_url(config.get("base_url"))
         except CouncilError as error:
             return str(error)
     return None

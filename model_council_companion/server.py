@@ -130,10 +130,20 @@ def _choose_folder() -> str:
         import tkinter
         from tkinter import filedialog
         root = tkinter.Tk()
-        root.withdraw()
+        # Give the native dialog a real, on-screen parent. A withdrawn Tk root
+        # defaults to the origin, which can put the OS file picker off-screen
+        # on multi-monitor desktops or after display layout changes.
+        width, height = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.geometry(f"1x1+{max(0, (width - 1) // 2)}+{max(0, (height - 1) // 2)}")
         root.attributes("-topmost", True)
+        root.update_idletasks()
+        root.lift()
         try:
-            return filedialog.askdirectory(parent=root, title="Choose a Model Council workspace")
+            return filedialog.askdirectory(
+                parent=root,
+                title="Choose a Model Council workspace",
+                initialdir=str(Path.home()),
+            )
         finally:
             root.destroy()
     except Exception as error:

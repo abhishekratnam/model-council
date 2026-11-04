@@ -52,9 +52,9 @@ BINARY_SUFFIXES = {
 ALLOWED_COMMAND_EXECUTABLES = {
     "python", "python3", "pytest", "ruff", "pip", "uv",
     "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
-    "go", "cargo",
+    "go", "cargo", "git", "sudo", "rm", "rmdir", "unlink", "mv", "chmod", "chown",
+    "truncate", "dd", "mkfs", "shutdown", "reboot", "kill",
 }
-FORBIDDEN_COMMAND_TOKENS = {"sudo", "rm", "shutdown", "reboot", "kill", "mkfs", "dd"}
 
 
 # ── Root & path jail ─────────────────────────────────────────────────────────
@@ -442,9 +442,6 @@ def validate_command(command: Any) -> str:
         raise CouncilError(
             f"Command '{tokens[0]}' is not allowlisted. Allowed starting commands: {', '.join(sorted(ALLOWED_COMMAND_EXECUTABLES))}."
         )
-    lowered = {token.lower() for token in tokens}
-    if lowered & FORBIDDEN_COMMAND_TOKENS:
-        raise CouncilError("run_command refuses destructive subcommands.")
     if "\n" in command or "\r" in command:
         raise CouncilError("run_command must be a single line.")
     return command

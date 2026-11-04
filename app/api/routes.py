@@ -3,10 +3,11 @@ import asyncio
 from fastapi import APIRouter
 
 from app.core.run_registry import cancel_run
-from app.models.schemas import OllamaModelsPayload, OpenRouterModelsPayload
+from app.models.schemas import OllamaModelsPayload, OpenRouterModelsPayload, ExoModelsPayload
 from app.services.council import memory_history_response
 from app.services.ollama import ollama_models
 from app.services.openrouter import openrouter_models
+from app.services.exo import exo_models
 from app.services.validation import validate_session_id
 from app.services import workspace
 from app.core.exceptions import CouncilError
@@ -71,6 +72,11 @@ async def get_analytics():
 async def ollama_models_endpoint(payload: OllamaModelsPayload):
     body = payload.model_dump()
     return await asyncio.to_thread(ollama_models, body)
+
+
+@router.post("/exo/models")
+async def exo_models_endpoint(payload: ExoModelsPayload):
+    return await asyncio.to_thread(exo_models, payload.model_dump())
 
 
 @router.post("/openrouter/models")

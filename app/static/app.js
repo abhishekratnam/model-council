@@ -46,6 +46,10 @@
     ollamaStatus: $("#ollama-status"),
     ollamaModel: $("#ollama-model"),
     ollamaBaseUrl: $("#ollama-base-url"),
+    exoRefresh: $("#refresh-exo"),
+    exoStatus: $("#exo-status"),
+    exoModel: $("#exo-model"),
+    exoBaseUrl: $("#exo-base-url"),
     customMode: $("#custom-mode"),
     customStatus: $("#custom-status"),
     customJson: $("#custom-json"),
@@ -63,6 +67,7 @@
       custom: $("#custom-enabled"),
       anthropic: $("#anthropic-enabled"),
       ollama: $("#ollama-enabled"),
+      exo: $("#exo-enabled"),
     },
     // Memory elements
     memoryEnabled: $("#memory-enabled"),
@@ -121,8 +126,8 @@
     agentSummaryMeta: $("#agent-summary-meta"),
   };
 
-  const providers = ["openai", "openrouter", "custom", "anthropic", "ollama"];
-  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama" };
+  const providers = ["openai", "openrouter", "custom", "anthropic", "ollama", "exo"];
+  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama", exo: "exo" };
 
   // Streaming deltas re-render the whole accumulated answer (O(text length)
   // each time), so coalesce them to at most one markdown render per interval.
@@ -161,7 +166,7 @@
     workspaceRoot: "",
     workspaceMode: "server",
     companionRoot: "",
-    fullAccess: false,
+    fullAccess: true,
     pendingPausedPlan: null,
     resumePlanId: "",
   };
@@ -356,6 +361,56 @@
       }
     }
   }
+  async function handleExoRpc(socket, message) {
+    const baseUrl = (elements.exoBaseUrl.value.trim() || "http://127.0.0.1:52415").replace(/\/v1\/?$/, "").replace(/\/$/, "");
+    const controller = new AbortController();
+    socket.addEventListener("close", () => controller.abort());
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ model: message.model, messages: message.messages, stream: true,
+          max_tokens: message.max_tokens, temperature: message.temperature, stream_options: { include_usage: true } }), signal: controller.signal,
+      });
+      if (!response.ok) {
+        const raw = await response.text();
+        let detail = raw.trim();
+        try {
+          const body = JSON.parse(raw);
+          const error = body?.error;
+          detail = typeof error === "string" ? error
+            : typeof error?.message === "string" ? error.message
+            : typeof body?.message === "string" ? body.message : detail;
+        } catch (_) { /* Keep the plain response body when it is not JSON. */ }
+        throw new Error(`exo HTTP ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let usage = {};
+      while (socket.readyState === WebSocket.OPEN) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          try {
+            const event = JSON.parse(data);
+            if (event.usage) usage = event.usage;
+            const content = event.choices?.[0]?.delta?.content;
+            if (typeof content === "string" && content) socket.send(JSON.stringify({ rpc: "exo_chunk", request_id: message.request_id, content }));
+          } catch (_) { /* Ignore malformed stream fragments. */ }
+        }
+      }
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ rpc: "exo_done", request_id: message.request_id, usage }));
+    } catch (error) {
+      if (error.name !== "AbortError" && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ rpc: "exo_error", request_id: message.request_id, error: error.message || "Cannot reach exo. Check that it is running and allows browser access." }));
+    }
+  }
+
   async function handleOllamaRpc(socket, message) {
     const base_url = elements.ollamaBaseUrl.value.trim() || "http://127.0.0.1:11434";
     const payload = {
@@ -381,7 +436,7 @@
       });
 
       if (!response.ok) {
-        socket.send(JSON.stringify({ rpc: "ollama_error", error: `Ollama HTTP ${response.status}` }));
+        socket.send(JSON.stringify({ rpc: "ollama_error", request_id: message.request_id, error: `Ollama HTTP ${response.status}` }));
         return;
       }
 
@@ -399,7 +454,7 @@
           try {
             const event = JSON.parse(line);
             if (event.message && event.message.content) {
-              socket.send(JSON.stringify({ rpc: "ollama_chunk", content: event.message.content }));
+              socket.send(JSON.stringify({ rpc: "ollama_chunk", request_id: message.request_id, content: event.message.content }));
             }
             if (event.done) {
               final_usage = {
@@ -414,12 +469,13 @@
           }
         }
       }
-      socket.send(JSON.stringify({ rpc: "ollama_done", usage: final_usage }));
+      socket.send(JSON.stringify({ rpc: "ollama_done", request_id: message.request_id, usage: final_usage }));
 
     } catch (err) {
       if (err.name === "AbortError") return;   // expected after a stop or socket close
       socket.send(JSON.stringify({
         rpc: "ollama_error",
+        request_id: message.request_id,
         error: "Cannot reach local Ollama from browser. Is it running? (Check OLLAMA_ORIGINS)"
       }));
     } finally {
@@ -461,6 +517,10 @@
 
         if (message.type === "rpc_ollama_chat") {
           handleOllamaRpc(socket, message);
+          return;
+        }
+        if (message.type === "rpc_exo_chat") {
+          handleExoRpc(socket, message);
           return;
         }
         if (message.type === "workspace_companion_request") {
@@ -530,6 +590,7 @@
         model: elements.ollamaModel.value.trim(),
         base_url: elements.ollamaBaseUrl.value.trim(),
       },
+      exo: { enabled: isEnabled("exo"), model: elements.exoModel.value.trim(), base_url: elements.exoBaseUrl.value.trim() },
       custom: {
         enabled: customEnabled,
         mode: customMode,
@@ -635,7 +696,7 @@
       if (provider === "custom") {
         return Boolean(config.endpoint.trim()) && (config.auth_type === "none" || Boolean(config.api_key.trim()));
       }
-      return provider === "ollama";
+      return provider === "ollama" || provider === "exo";
     });
     const selected = elements.agentProvider.value;
     const options = document.createDocumentFragment();
@@ -1225,6 +1286,81 @@
     } finally {
       elements.openrouterRefresh.disabled = !isEnabled("openrouter");
       elements.openrouterRefresh.textContent = "Refresh";
+    }
+  }
+
+  function exoActiveModelIds(statePayload) {
+    const instances = statePayload?.instances || statePayload?.state?.instances || {};
+    const found = [];
+    const visit = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+      } else if (value && typeof value === "object") {
+        for (const [key, item] of Object.entries(value)) {
+          const normalizedKey = key.replaceAll("_", "").toLowerCase();
+          if (normalizedKey === "modelid" && typeof item === "string" && item.trim()) {
+            found.push(item.trim());
+          } else {
+            visit(item);
+          }
+        }
+      }
+    };
+    visit(instances);
+    return [...new Set(found)];
+  }
+
+  async function refreshExo() {
+    elements.exoRefresh.disabled = true;
+    elements.exoRefresh.textContent = "Checking…";
+    elements.exoStatus.textContent = "Checking exo…";
+    elements.exoStatus.className = "connection-note";
+    const base_url = (elements.exoBaseUrl.value.trim() || "http://127.0.0.1:52415").replace(/\/v1\/?$/, "").replace(/\/$/, "");
+    try {
+      let raw;
+      const host = new URL(base_url).hostname;
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+        const response = await fetch(`${base_url.replace(/\/$/, "")}/v1/models`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        raw = await response.json();
+        // The browser must contact loopback exo directly, so the server-side
+        // normalizer is not involved here. Prefer canonical IDs from active
+        // instances over short catalog IDs returned by /v1/models.
+        try {
+          const stateResponse = await fetch(`${base_url.replace(/\/$/, "")}/state`);
+          if (stateResponse.ok) {
+            const activeIds = exoActiveModelIds(await stateResponse.json());
+            if (activeIds.length) raw = activeIds.map((name) => ({ name }));
+          }
+        } catch (_) { /* Keep the catalog response if state is unavailable. */ }
+      } else {
+        raw = await request("/api/exo/models", { base_url });
+      }
+      const models = Array.isArray(raw) ? raw : (Array.isArray(raw.models) ? raw.models : (Array.isArray(raw.data) ? raw.data : []));
+      const selected = elements.exoModel.value;
+      const options = document.createDocumentFragment();
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = models.length ? "Choose an exo model" : "No models found";
+      options.append(placeholder);
+      const names = new Set();
+      for (const item of models) {
+        const name = typeof item?.name === "string" ? item.name.trim() : (typeof item?.id === "string" ? item.id.trim() : "");
+        if (!name || names.has(name)) continue;
+        names.add(name);
+        const option = document.createElement("option"); option.value = name; option.textContent = name; options.append(option);
+      }
+      elements.exoModel.replaceChildren(options);
+      elements.exoModel.value = names.has(selected) ? selected : (names.values().next().value || "");
+      elements.exoStatus.textContent = `${names.size} exo ${names.size === 1 ? "model" : "models"} available`;
+      elements.exoStatus.className = "connection-note is-ready";
+      updateAgentProviderOptions();
+    } catch (error) {
+      elements.exoStatus.textContent = error.message || "Could not reach exo. Check that it is running and allows browser access.";
+      elements.exoStatus.className = "connection-note is-error";
+    } finally {
+      elements.exoRefresh.disabled = !isEnabled("exo");
+      elements.exoRefresh.textContent = "Refresh";
     }
   }
 
@@ -2168,6 +2304,7 @@
     elements.copyFinal.addEventListener("click", () => copyText(state.finalAnswer, elements.copyFinal));
     elements.clear.addEventListener("click", clearSession);
     elements.ollamaRefresh.addEventListener("click", refreshOllama);
+    elements.exoRefresh.addEventListener("click", refreshExo);
 
     // Workspace / code agent listeners
     elements.modeCouncil.addEventListener("click", () => switchMode("council"));

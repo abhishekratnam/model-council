@@ -155,7 +155,22 @@ def _plan_scope(plan: str) -> tuple[set[str], set[str]]:
 
 def _command_needs_extra_approval(command: str, root: str) -> bool:
     """Keep likely network, destructive, and out-of-root commands interactive."""
-    if re.search(r"\b(curl|wget|fetch|ssh|scp|rsync|ftp|nc|ncat|netcat)\b|https?://", command, re.I):
+    if re.search(
+        r"\b(curl|wget|fetch|ssh|scp|rsync|ftp|nc|ncat|netcat|sudo)\b|https?://"
+        r"|\b(?:pip|uv|npm|pnpm|yarn|cargo)\s+(?:install|add|update|upgrade|remove|uninstall|publish)\b"
+        r"|\bgo\s+get\b|\bgit\s+(?:clone|fetch|pull|push)\b",
+        command,
+        re.I,
+    ):
+        return True
+    if re.search(
+        r"\b(rm|rmdir|unlink|truncate|dd|mkfs|shutdown|reboot|kill|chmod|chown)\b"
+        r"|\bgit\s+(?:reset|clean)\b"
+        r"|\b(?:os\.(?:remove|unlink|rmdir|rename|replace)|shutil\.(?:rmtree|move)|"
+        r"fs\.(?:rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync))\b",
+        command,
+        re.I,
+    ):
         return True
     if re.search(r"(?:^|[\s'\"])\.\.(?:/|\\)", command):
         return True

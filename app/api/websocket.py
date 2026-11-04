@@ -1,6 +1,7 @@
 import asyncio
 import json
 import queue
+import time
 from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -11,6 +12,24 @@ from app.services.security import is_safe_browser_origin, scrub_secrets
 from app.core.exceptions import CouncilError, ProviderError
 
 router = APIRouter()
+
+
+class BrowserRpcQueue(queue.Queue):
+    """Shared browser replies, routed to the local model call that requested them."""
+
+    def get_for(self, request_id: str, timeout: float):
+        deadline = time.monotonic() + timeout
+        with self.not_empty:
+            while True:
+                for index, item in enumerate(self.queue):
+                    if item.get("request_id") == request_id:
+                        del self.queue[index]
+                        self.not_full.notify()
+                        return item
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                self.not_empty.wait(remaining)
 
 async def _safe_ws_send(websocket: WebSocket, payload: dict[str, Any]) -> None:
     if websocket.application_state != WebSocketState.CONNECTED:
@@ -29,7 +48,7 @@ async def council_stream(websocket: WebSocket):
 
     await websocket.accept()
 
-    browser_rpc_queue = queue.Queue()
+    browser_rpc_queue = BrowserRpcQueue()
 
     async def listen_for_browser_rpcs():
         try:
@@ -44,13 +63,17 @@ async def council_stream(websocket: WebSocket):
         except (WebSocketDisconnect, RuntimeError):
             pass
 
-    rpc_listener = asyncio.create_task(listen_for_browser_rpcs())
-
+    rpc_listener = None
     try:
         raw = await websocket.receive_text()
         body = json.loads(raw)
         if not isinstance(body, dict):
             raise CouncilError("WebSocket request must be a JSON object.")
+
+        # Only start the RPC reader after consuming the initial request. Two
+        # concurrent receive_text() calls on one Starlette WebSocket race and
+        # can close the connection before either local provider replies.
+        rpc_listener = asyncio.create_task(listen_for_browser_rpcs())
 
         action = body.get("action")
         loop = asyncio.get_running_loop()
@@ -84,7 +107,8 @@ async def council_stream(websocket: WebSocket):
     except Exception:
         await _safe_ws_send(websocket, {"type": "error", "message": "Unexpected server error."})
     finally:
-        rpc_listener.cancel()
+        if rpc_listener is not None:
+            rpc_listener.cancel()
         try:
             if websocket.application_state == WebSocketState.CONNECTED:
                 await websocket.close()

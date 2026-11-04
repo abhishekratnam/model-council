@@ -42,6 +42,7 @@ logger = logging.getLogger("model_council")
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_EXO_BASE_URL = "http://127.0.0.1:52415"
 MAX_PROMPT_CHARS = 14_000
 MAX_SYSTEM_PROMPT_CHARS = 4_000
 MAX_PROVIDER_OUTPUT_CHARS = 40_000
@@ -124,6 +125,7 @@ PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
     "anthropic": "Claude",
     "ollama": "Ollama",
+    "exo": "exo",
     "custom": "Azure / custom",
 }
 

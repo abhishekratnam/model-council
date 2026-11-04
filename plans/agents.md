@@ -3,7 +3,7 @@
 These instructions apply to every supported project in this workspace **before**
 any language-specific guidance. Supported categories: `python`, `rust`,
 `golang`, `javascript` (JavaScript includes TypeScript). Mixed-language
-workspaces are expected; use the detection rules in to pick the toolchain.
+workspaces are expected; use the detection rules in §2 to pick the toolchain.
 
 ---
 
@@ -85,8 +85,8 @@ directories, and install nothing outside the approved plan.
 - One approval authorizes the listed in-scope files and exact commands for that run. Keep showing diffs and recording applied changes.
 - A rejected plan may be revised and presented once. A second rejection ends the run without implementation.
 - If plan review is unanswered for `MC_CONFIRM_TIMEOUT_S` seconds (default 1800), save the plan to `.model_council/session_state.json`, mark the run paused, and offer approve, reject, or discard on the next app start. Approval resumes the saved plan.
-- Ask again for actions outside the approved scope. Network, destructive, and outside-workspace actions always need explicit approval; blocked destructive commands remain blocked by command validation.
-- The Workspace **Full access** toggle skips per-command approval for ordinary allowlisted commands. Network and outside-workspace commands still ask; file changes still follow the approved-plan scope.
+- Ask again for actions outside the approved file scope. Network, destructive, and outside-workspace commands always need explicit approval.
+- The Workspace **Full access** toggle is on by default and skips per-command approval for ordinary allowlisted commands. Network, destructive, and outside-workspace commands still ask; file changes still follow the approved-plan scope.
 - On macOS, show an `osascript` notification when a plan or an out-of-scope action awaits approval.
 - Do not put API keys or provider secrets in persisted session state.
 
@@ -95,7 +95,7 @@ directories, and install nothing outside the approved plan.
 Machine-readable contracts consumed by the agent runtime. Filenames are
 normalized to lowercase before matching `FILE_SIGNALS`.
 
-```
+```python
 GUIDES_DIR = Path(__file__).resolve().parents[2] / "plans"
 SUPPORTED_LANGUAGES = ("python", "rust", "golang", "javascript")
 
@@ -137,8 +137,7 @@ BINARY_SUFFIXES = {
 ALLOWED_COMMAND_EXECUTABLES = {
     "python", "python3", "pytest", "ruff", "pip", "uv",
     "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
-    "go", "cargo",
+    "go", "cargo", "git", "sudo", "rm", "rmdir", "unlink", "mv", "chmod", "chown",
+    "truncate", "dd", "mkfs", "shutdown", "reboot", "kill",
 }
-
-FORBIDDEN_COMMAND_TOKENS = {"sudo", "rm", "shutdown", "reboot", "kill", "mkfs", "dd"}
 ```

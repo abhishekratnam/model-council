@@ -5,13 +5,101 @@ import queue
 import urllib.parse
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any
 from app.core.config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
 from app.services.extractors import extract_openai_text, extract_anthropic_text, usage_fields
-from app.services.security import clean_ollama_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
+from app.services.security import clean_ollama_base_url, clean_exo_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
 from app.llm.openrouter_client import chat_completion
+
+
+def exo_relay_messages(config: dict[str, Any], messages: list[dict[str, str]], max_tokens: int, temperature: float,
+                       emit: Any, browser_rpc_queue: queue.Queue, delta_event_type: str, provider: str = "exo") -> tuple[str, dict[str, int]]:
+    request_id = uuid.uuid4().hex
+    emit({"type": "rpc_exo_chat", "request_id": request_id, "model": provider_model(config), "messages": messages,
+          "max_tokens": max_tokens, "temperature": temperature})
+    chunks: list[str] = []
+    usage: dict[str, int] = {}
+    while True:
+        try:
+            msg = (browser_rpc_queue.get_for(request_id, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS)
+                   if hasattr(browser_rpc_queue, "get_for") else browser_rpc_queue.get(timeout=OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS))
+        except queue.Empty:
+            raise ProviderError("Browser took too long to respond from exo.")
+        if msg.get("request_id") != request_id:
+            continue
+        if msg.get("rpc") == "exo_chunk":
+            content = msg.get("content", "")
+            if content:
+                chunks.append(content)
+                if delta_event_type == "member_delta":
+                    emit({"type": delta_event_type, "provider": provider, "delta": content})
+                else:
+                    emit({"type": delta_event_type, "delta": content})
+        elif msg.get("rpc") == "exo_done":
+            usage = msg.get("usage", {})
+            break
+        elif msg.get("rpc") == "exo_error":
+            raise ProviderError(msg.get("error", "Browser failed to reach exo."))
+    text = "".join(chunks).strip()
+    if not text:
+        raise ProviderError("exo returned no text output.")
+    return text, usage_fields({"usage": usage}, "exo")
+
+
+def _stream_exo_chat(config: dict[str, Any], messages: list[dict[str, str]], max_tokens: int,
+                     temperature: float, on_delta: Any) -> tuple[str, dict[str, int]]:
+    base_url = clean_exo_base_url(config.get("base_url"))
+    request = urllib.request.Request(f"{base_url}/v1/chat/completions",
+        data=json.dumps({"model": provider_model(config), "messages": messages, "stream": True,
+                         "max_tokens": max_tokens, "temperature": temperature,
+                         "stream_options": {"include_usage": True}}, ensure_ascii=False).encode("utf-8"),
+        headers={"Accept": "text/event-stream", "Content-Type": "application/json"}, method="POST")
+    chunks: list[str] = []
+    usage: dict[str, Any] = {}
+    try:
+        context = ssl.create_default_context() if base_url.startswith("https://") else None
+        with urllib.request.urlopen(request, timeout=OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS, context=context) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as error:
+                    raise ProviderError("exo returned an invalid streaming response.") from error
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                choices = event.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content") if isinstance(delta, dict) else None
+                    if isinstance(content, str) and content:
+                        chunks.append(content)
+                        on_delta(content)
+    except urllib.error.HTTPError as error:
+        detail = error_detail(error.read())
+        raise ProviderError(f"Request failed (HTTP {error.code}){': ' + detail if detail else ''}") from error
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as error:
+        raise ProviderError(f"Connection failed: {scrub_secrets(str(getattr(error, 'reason', error)))[:300]}") from error
+    text = "".join(chunks).strip()
+    if not text:
+        raise ProviderError("exo returned no text output.")
+    return text, usage_fields({"usage": usage}, "exo")
+
+
+def call_exo_messages(config: dict[str, Any], messages: list[dict[str, str]], max_tokens: int, temperature: float,
+                      on_delta: Any, *, emit: Any = None, browser_rpc_queue: queue.Queue | None = None,
+                      delta_event_type: str = "agent_delta") -> tuple[str, dict[str, int]]:
+    base_url = clean_exo_base_url(config.get("base_url"))
+    if emit is not None and browser_rpc_queue is not None and is_loopback_host(urllib.parse.urlsplit(base_url).hostname):
+        return exo_relay_messages(config, messages, max_tokens, temperature, emit, browser_rpc_queue, delta_event_type)
+    return _stream_exo_chat(config, messages, max_tokens, temperature, on_delta)
 
 def call_openai(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     model = provider_model(config)
@@ -116,8 +204,10 @@ def ollama_relay_messages(
     keep_alive: str = "5m",
     format_json: bool = False,
 ) -> tuple[str, dict[str, int]]:
+    request_id = uuid.uuid4().hex
     rpc = {
         "type": "rpc_ollama_chat",
+        "request_id": request_id,
         "model": provider_model(config),
         "messages": messages,
         "options": options,
@@ -131,9 +221,12 @@ def ollama_relay_messages(
     final_usage: dict[str, int] = {}
     while True:
         try:
-            msg = browser_rpc_queue.get(timeout=OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS)
+            msg = (browser_rpc_queue.get_for(request_id, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS)
+                   if hasattr(browser_rpc_queue, "get_for") else browser_rpc_queue.get(timeout=OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS))
         except queue.Empty:
             raise ProviderError("Browser took too long to respond from local Ollama.")
+        if msg.get("request_id") != request_id:
+            continue
             
         rpc_type = msg.get("rpc")
         if rpc_type == "ollama_chunk":
@@ -284,6 +377,9 @@ def call_agent_messages(
             num_ctx=num_ctx, emit=emit, browser_rpc_queue=browser_rpc_queue,
             delta_event_type=delta_event_type,
         )
+    if provider == "exo":
+        return call_exo_messages(config, messages, max_tokens, temperature, on_delta,
+            emit=emit, browser_rpc_queue=browser_rpc_queue, delta_event_type=delta_event_type)
 
     if provider in {"openai", "custom"}:
         if provider == "openai":
@@ -370,4 +466,8 @@ def call_provider(
         # Ollama has no non-streaming path left: aggregate the stream silently.
         return call_ollama_stream(config, question, instructions, max_tokens, temperature,
                                   lambda _delta: None)
+    if provider == "exo":
+        return call_exo_messages(config,
+            [{"role": "system", "content": instructions}, {"role": "user", "content": question}],
+            max_tokens, temperature, lambda _delta: None)
     raise CouncilError("Unknown provider.")

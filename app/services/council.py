@@ -14,7 +14,7 @@ from app.core.exceptions import CouncilError, ProviderError
 from app.core.memory import generate_round_id
 from app.services.validation import trim_text, bounded_int, bounded_float, truncate, validate_session_id
 from app.services.security import provider_config, provider_label, provider_model, provider_ready, is_loopback_host, clean_ollama_base_url, scrub_secrets
-from app.services.providers import call_provider, call_ollama_stream, ollama_relay_call
+from app.services.providers import call_provider, call_ollama_stream, ollama_relay_call, call_exo_messages
 import json
 import re
 def _call_member(provider, config, prompt, instructions, max_tokens, temperature,
@@ -34,6 +34,11 @@ def _call_member(provider, config, prompt, instructions, max_tokens, temperature
         return call_ollama_stream(config, prompt, instructions, max_tokens, temperature,
                                   lambda delta, name=provider: emit(
                                       {"type": delta_event, "provider": name, "delta": delta}))
+    if provider == "exo" and emit is not None:
+        return call_exo_messages(config, [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}],
+                                 max_tokens, temperature,
+                                 lambda delta: emit({"type": delta_event, "provider": provider, "delta": delta}),
+                                 emit=emit, browser_rpc_queue=browser_rpc_queue, delta_event_type=delta_event)
     return call_provider(provider, config, prompt, instructions, max_tokens, temperature)
 
 
