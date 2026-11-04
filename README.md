@@ -388,3 +388,10 @@ python -m pytest tests -v
 ```
 
 The server preflight test starts its own short-lived HTTP server on a free loopback port.
+## Support Model Council
+
+If you find Model Council useful, consider supporting its development.
+
+<a href="https://buymeacoffee.com/keshiba2466" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200" />
+</a>
