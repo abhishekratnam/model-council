@@ -5,9 +5,18 @@
 
 Model Council is a local-first web app that asks OpenAI, OpenRouter, Claude, Ollama and exo models, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
 
+
 The application itself runs as a FastAPI service. For local development, Python dependencies are managed with `uv`, Uvicorn runs the FastAPI application, and Redis can run separately in Docker.
 
 The application supports both host-native and Docker execution. 
+
+## Support Model Council
+
+If you find Model Council useful, consider supporting its development.
+
+<a href="https://buymeacoffee.com/keshiba2466" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200" />
+</a>
 
 ## Requirements
 
@@ -388,10 +397,3 @@ python -m pytest tests -v
 ```
 
 The server preflight test starts its own short-lived HTTP server on a free loopback port.
-## Support Model Council
-
-If you find Model Council useful, consider supporting its development.
-
-<a href="https://buymeacoffee.com/keshiba2466" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200" />
-</a>

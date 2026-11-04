@@ -99,6 +99,57 @@ summary:focus-visible {
   padding: 26px 0 58px;
 }
 
+.about-support {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  margin-top: 34px;
+  padding: 24px 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(120deg, rgba(27, 26, 35, 0.82), rgba(32, 28, 43, 0.72));
+}
+
+.about-copy {
+  max-width: 680px;
+}
+
+.about-copy h2 {
+  margin: 5px 0 10px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.35rem, 2.4vw, 1.8rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.about-copy p:not(.eyebrow) {
+  max-width: 62ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.support-qr {
+  flex: 0 0 180px;
+  margin: 0;
+  text-align: center;
+}
+
+.support-qr img {
+  display: block;
+  width: 180px;
+  height: 180px;
+  padding: 7px;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.support-qr figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -1381,10 +1432,13 @@ input[type="range"] {
   .deliberation-panel { padding: 30px 24px 38px; }
   .prompt-heading { align-items: flex-start; flex-direction: column; }
   .root-picker { width: 100%; min-width: 0; max-width: none; }
+  .about-support { align-items: flex-start; }
 }
 
 @media (max-width: 580px) {
   .shell { width: min(100% - 22px, 520px); }
+  .about-support { align-items: center; flex-direction: column; gap: 20px; padding: 21px; }
+  .about-copy { width: 100%; }
   .local-badge { font-size: 10px; }
   .hero { padding-top: 48px; }
   h1 { font-size: 42px; }
