@@ -124,10 +124,13 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "openrouter": "OpenRouter",
     "anthropic": "Claude",
+    "gemini": "Gemini",
     "ollama": "Ollama",
     "exo": "exo",
     "custom": "Azure / custom",
 }
+
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 # ── Code agent prompt ────────────────────────────────────────────────────────
 
@@ -182,6 +185,9 @@ Rules:
 PRICING_PER_1K_TOKENS = {
     "openai": 0.005,      # e.g., GPT-4o-mini is cheaper, GPT-4o is ~$0.01
     "anthropic": 0.015,   # e.g., Claude 3.5 Sonnet
+    "gemini": 0.0035,     # e.g., Gemini 2.5 Flash is cheaper, Pro is ~$0.01
+    "openrouter": 0.005,  # Blended estimate; actual cost depends on the chosen model
     "ollama": 0.0,        # Local models are free
+    "exo": 0.0,           # Local models are free
     "custom": 0.005,      # Default for Azure/custom endpoints
 }

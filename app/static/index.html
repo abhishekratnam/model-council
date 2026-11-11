@@ -173,6 +173,34 @@
               <p id="openrouter-status" class="connection-note">Enter an OpenRouter key, then refresh to load available text models.</p>
             </article>
 
+            <article class="provider-card provider-gemini" data-provider-card="gemini">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <span class="provider-glyph gemini-glyph" aria-hidden="true">✦</span>
+                  <div>
+                    <h3>Gemini</h3>
+                    <p>Cloud council member</p>
+                  </div>
+                </div>
+                <label class="switch" aria-label="Enable Gemini">
+                  <input id="gemini-enabled" type="checkbox" />
+                  <span></span>
+                </label>
+              </div>
+              <label class="field-label" for="gemini-key">API key</label>
+              <div class="secret-field">
+                <input id="gemini-key" class="field-input" type="password" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                <button class="reveal-secret" type="button" data-reveal="gemini-key" aria-label="Show Gemini API key">Show</button>
+              </div>
+              <div class="inline-label-row model-row">
+                <label class="field-label" for="gemini-model">Model</label>
+                <button id="refresh-gemini" class="quiet-button" type="button">Refresh</button>
+              </div>
+              <input id="gemini-model" class="field-input" value="gemini-2.5-flash" maxlength="200" list="gemini-model-options" spellcheck="false" />
+              <datalist id="gemini-model-options"></datalist>
+              <p id="gemini-status" class="connection-note">Enter a Gemini API key, then refresh to list available models.</p>
+            </article>
+
             <article class="provider-card provider-custom" data-provider-card="custom">
               <div class="provider-head">
                 <div class="provider-title">

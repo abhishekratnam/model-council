@@ -42,6 +42,11 @@
     openrouterStatus: $("#openrouter-status"),
     anthropicModel: $("#anthropic-model"),
     anthropicKey: $("#anthropic-key"),
+    geminiKey: $("#gemini-key"),
+    geminiModel: $("#gemini-model"),
+    geminiModelOptions: $("#gemini-model-options"),
+    geminiRefresh: $("#refresh-gemini"),
+    geminiStatus: $("#gemini-status"),
     ollamaRefresh: $("#refresh-ollama"),
     ollamaStatus: $("#ollama-status"),
     ollamaModel: $("#ollama-model"),
@@ -66,6 +71,7 @@
       openrouter: $("#openrouter-enabled"),
       custom: $("#custom-enabled"),
       anthropic: $("#anthropic-enabled"),
+      gemini: $("#gemini-enabled"),
       ollama: $("#ollama-enabled"),
       exo: $("#exo-enabled"),
     },
@@ -126,8 +132,8 @@
     agentSummaryMeta: $("#agent-summary-meta"),
   };
 
-  const providers = ["openai", "openrouter", "custom", "anthropic", "ollama", "exo"];
-  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", ollama: "Ollama", exo: "exo" };
+  const providers = ["openai", "openrouter", "custom", "anthropic", "gemini", "ollama", "exo"];
+  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", gemini: "Gemini", ollama: "Ollama", exo: "exo" };
 
   // Streaming deltas re-render the whole accumulated answer (O(text length)
   // each time), so coalesce them to at most one markdown render per interval.
@@ -585,6 +591,11 @@
         model: elements.anthropicModel.value.trim(),
         api_key: anthropicEnabled ? elements.anthropicKey.value : "",
       },
+      gemini: {
+        enabled: isEnabled("gemini"),
+        model: elements.geminiModel.value.trim(),
+        api_key: isEnabled("gemini") ? elements.geminiKey.value : "",
+      },
       ollama: {
         enabled: ollamaEnabled,
         model: elements.ollamaModel.value.trim(),
@@ -692,7 +703,7 @@
     const eligible = providers.filter((provider) => {
       const config = settings[provider];
       if (!config.enabled || !config.model) return false;
-      if (["openai", "openrouter", "anthropic"].includes(provider)) return Boolean(config.api_key.trim());
+      if (["openai", "openrouter", "anthropic", "gemini"].includes(provider)) return Boolean(config.api_key.trim());
       if (provider === "custom") {
         return Boolean(config.endpoint.trim()) && (config.auth_type === "none" || Boolean(config.api_key.trim()));
       }
@@ -1289,6 +1300,45 @@
     }
   }
 
+  async function refreshGeminiModels() {
+    if (elements.geminiRefresh.disabled) return;
+    const api_key = elements.geminiKey.value.trim();
+    if (!api_key) {
+      elements.geminiStatus.textContent = "Enter your Gemini API key first.";
+      elements.geminiStatus.className = "connection-note is-error";
+      return;
+    }
+
+    elements.geminiRefresh.disabled = true;
+    elements.geminiRefresh.textContent = "Loading…";
+    elements.geminiStatus.textContent = "Loading available Gemini models…";
+    elements.geminiStatus.className = "connection-note";
+    try {
+      const data = await request("/api/gemini/models", { api_key });
+      const models = Array.isArray(data.models) ? data.models : [];
+      elements.geminiModelOptions.replaceChildren(models.map((model) => {
+        const option = document.createElement("option");
+        option.value = model.id;
+        return option;
+      }));
+      const selected = elements.geminiModel.value.trim();
+      const suggestion = models.some((model) => model.id === selected)
+        ? selected
+        : (models[0]?.id || "gemini-2.5-flash");
+      elements.geminiStatus.textContent = models.length
+        ? `${models.length.toLocaleString()} Gemini models available. Pick one or type a model ID.`
+        : "Gemini returned no text-capable models.";
+      elements.geminiStatus.className = "connection-note is-ready";
+      if (!selected) elements.geminiModel.value = suggestion;
+    } catch (error) {
+      elements.geminiStatus.textContent = error.message || "Could not load Gemini models.";
+      elements.geminiStatus.className = "connection-note is-error";
+    } finally {
+      elements.geminiRefresh.disabled = !isEnabled("gemini");
+      elements.geminiRefresh.textContent = "Refresh";
+    }
+  }
+
   function exoActiveModelIds(statePayload) {
     const instances = statePayload?.instances || statePayload?.state?.instances || {};
     const found = [];
@@ -1474,6 +1524,7 @@
     elements.openaiKey.value = "";
     elements.openrouterKey.value = "";
     elements.anthropicKey.value = "";
+    elements.geminiKey.value = "";
     elements.customKey.value = "";
     elements.customJson.value = "";
     state.customHeaders = {};
@@ -1492,6 +1543,8 @@
     state.memberViews.clear();
     elements.ollamaStatus.textContent = "Not checked yet";
     elements.ollamaStatus.className = "connection-note";
+    elements.geminiStatus.textContent = "Enter a Gemini API key, then refresh to list available models.";
+    elements.geminiStatus.className = "connection-note";
     showToast("Keys, prompt, and council results cleared from this page.");
   }
 
@@ -2305,6 +2358,7 @@
     elements.clear.addEventListener("click", clearSession);
     elements.ollamaRefresh.addEventListener("click", refreshOllama);
     elements.exoRefresh.addEventListener("click", refreshExo);
+    elements.geminiRefresh.addEventListener("click", refreshGeminiModels);
 
     // Workspace / code agent listeners
     elements.modeCouncil.addEventListener("click", () => switchMode("council"));

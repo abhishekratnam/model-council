@@ -430,6 +430,7 @@ h1 span {
 .provider-openrouter { box-shadow: inset 2px 0 0 rgba(91, 176, 235, 0.78); }
 .provider-custom { box-shadow: inset 2px 0 0 rgba(91, 176, 235, 0.78); }
 .provider-claude { box-shadow: inset 2px 0 0 rgba(233, 120, 74, 0.7); }
+.provider-gemini { box-shadow: inset 2px 0 0 rgba(66, 133, 244, 0.75); }
 .provider-ollama { box-shadow: inset 2px 0 0 rgba(157, 137, 255, 0.75); }
 
 .provider-head {
@@ -463,6 +464,7 @@ h1 span {
 .openrouter-glyph { background: rgba(91, 176, 235, 0.14); color: #a8ddff; }
 .custom-glyph { background: rgba(91, 176, 235, 0.14); color: #a8ddff; }
 .claude-glyph { background: var(--orange-soft); color: #f2b198; }
+.gemini-glyph { background: rgba(66, 133, 244, 0.16); color: #a8c7fa; }
 .ollama-glyph { background: var(--violet-soft); color: #cdc3ff; }
 
 .provider-title h3 {
@@ -973,6 +975,7 @@ input[type="range"] {
 .member-result[data-provider="openai"] .member-dot { background: var(--green); box-shadow: 0 0 8px rgba(136, 205, 161, 0.5); }
 .member-result[data-provider="custom"] .member-dot { background: #62c4f5; box-shadow: 0 0 8px rgba(98, 196, 245, 0.5); }
 .member-result[data-provider="anthropic"] .member-dot { background: var(--orange); box-shadow: 0 0 8px rgba(233, 120, 74, 0.5); }
+.member-result[data-provider="gemini"] .member-dot { background: #669df6; box-shadow: 0 0 8px rgba(102, 157, 246, 0.55); }
 .member-result[data-provider="ollama"] .member-dot { background: var(--violet); box-shadow: 0 0 8px rgba(157, 137, 255, 0.55); }
 
 .member-name {

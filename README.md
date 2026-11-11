@@ -3,7 +3,7 @@
 
 # Model Council
 
-Model Council is a local-first web app that asks OpenAI, OpenRouter, Claude, Ollama and exo models, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
+Model Council is a local-first web app that asks OpenAI, OpenRouter, Claude, Gemini, Ollama and exo models, and optionally an Azure OpenAI or compatible Responses API deployment for independent answers. After the first round, you select the useful responses and appoint one completed member to synthesize a final answer.
 
 
 The application itself runs as a FastAPI service. For local development, Python dependencies are managed with `uv`, Uvicorn runs the FastAPI application, and Redis can run separately in Docker.
@@ -140,7 +140,7 @@ Keep provider API keys out of source control. Add `.env` to `.gitignore` if it i
 Start the application from the project root:
 
 ```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 Open:
@@ -152,7 +152,7 @@ http://localhost:8787
 For a non-reloading local process:
 
 ```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787
 ```
 
 ## 5. Run Redis and FastAPI together
@@ -166,7 +166,7 @@ docker start model-council-redis 2>/dev/null || docker run -d --name model-counc
 Then start FastAPI in another terminal:
 
 ```bash
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 ## 6. Ollama (Local BYOK & Browser Relay)
@@ -219,6 +219,7 @@ Typical providers include:
 - OpenAI Responses API
 - OpenRouter Chat Completions API, with searchable model selection
 - Anthropic Messages API
+- Google Gemini generateContent API, with a model list loaded from your key
 - Ollama
 - Azure OpenAI
 - OpenAI-compatible Responses API deployments
@@ -238,7 +239,7 @@ Ollama responses and Ollama-led synthesis stream through the application's WebSo
 ## 9. Workspace mode (single-provider code agent)
 
 Workspace mode turns Model Council into a coding agent: choose one enabled provider and model
-from the members panel (Ollama, OpenAI, OpenRouter, Claude, or Azure / custom). That single model
+from the members panel (Ollama, OpenAI, OpenRouter, Claude, Gemini, or Azure / custom). That single model
 plans and drives the run while the agent explores a sandboxed codebase, stages changes, and asks
 for approval before applying file edits or running commands.
 
@@ -371,7 +372,7 @@ OLLAMA_ORIGINS="http://localhost:8787" ollama serve
 ```bash
 cd /path/to/model-council
 uv sync --extra web --extra dev
-uv run uvicorn fastapi_server:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload --reload-dir app
 ```
 
 For this host-native setup, your `.env` should point to:

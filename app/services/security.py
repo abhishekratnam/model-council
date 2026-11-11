@@ -11,6 +11,7 @@ def scrub_secrets(value: str) -> str:
     patterns = (
         r"sk-ant-[A-Za-z0-9_\-]{8,}",
         r"sk-[A-Za-z0-9_\-]{8,}",
+        r"AIza[0-9A-Za-z_\-]{10,}",
         r"Bearer\s+[A-Za-z0-9_\-\.]{8,}",
         r"x-api-key[=:]\s*[A-Za-z0-9_\-\.]{8,}",
     )
@@ -188,10 +189,12 @@ def provider_ready(provider: str, config: dict[str, Any], *, require_enabled: bo
         return "Disabled"
     if not provider_model(config):
         return "Choose a model"
-    if provider in {"openai", "openrouter", "anthropic"}:
+    if provider in {"openai", "openrouter", "anthropic", "gemini"}:
         key = config.get("api_key", "")
         if provider == "openrouter" and not (isinstance(key, str) and key.strip()):
             key = os.getenv("OPENROUTER_API_KEY", "")
+        if provider == "gemini" and not (isinstance(key, str) and key.strip()):
+            key = os.getenv("GEMINI_API_KEY", "")
         if not isinstance(key, str) or not key.strip():
             return "No API key supplied"
     if provider == "custom":

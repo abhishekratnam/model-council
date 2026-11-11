@@ -1,6 +1,7 @@
 import json
 import ssl
 import socket
+import os
 import queue
 import urllib.parse
 import urllib.error
@@ -10,7 +11,7 @@ from typing import Any
 from app.core.config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
-from app.services.extractors import extract_openai_text, extract_anthropic_text, usage_fields
+from app.services.extractors import extract_openai_text, extract_anthropic_text, extract_gemini_text, usage_fields
 from app.services.security import clean_ollama_base_url, clean_exo_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
 from app.llm.openrouter_client import chat_completion
 
@@ -118,6 +119,50 @@ def call_openai(config: dict[str, Any], question: str, instructions: str, max_to
         },
     )
     return extract_openai_text(response), usage_fields(response, "openai")
+
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+def _gemini_api_key(config: dict[str, Any]) -> str:
+    key = str(config.get("api_key", "")).strip()
+    if not key:
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise ProviderError("No Gemini API key supplied.")
+    return key
+
+def _gemini_generation_config(max_tokens: int, temperature: float) -> dict[str, Any]:
+    return {"temperature": temperature, "maxOutputTokens": max_tokens}
+
+def _gemini_generate(config: dict[str, Any], messages: list[dict[str, str]], max_tokens: int,
+                     temperature: float) -> dict[str, Any]:
+    """Shared Gemini generateContent request. System/developer turns become the
+    system instruction; contents only carry 'user'/'model' roles."""
+    system_text = "\n\n".join(
+        message["content"] for message in messages
+        if message.get("role") in {"system", "developer"}
+    )
+    contents = [
+        {"role": "model" if message.get("role") == "assistant" else "user", "parts": [{"text": message["content"]}]}
+        for message in messages if message.get("role") in {"user", "assistant"}
+    ]
+    payload: dict[str, Any] = {"contents": contents,
+                               "generationConfig": _gemini_generation_config(max_tokens, temperature)}
+    if system_text:
+        payload["system_instruction"] = {"parts": [{"text": system_text}]}
+    return request_json(
+        "POST",
+        f"{GEMINI_API_BASE_URL}/{urllib.parse.quote(provider_model(config), safe='')}@generateContent",
+        headers={"x-goog-api-key": _gemini_api_key(config)},
+        payload=payload,
+    )
+
+def call_gemini(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
+    response = _gemini_generate(
+        config,
+        [{"role": "system", "content": instructions}, {"role": "user", "content": question}],
+        max_tokens, temperature,
+    )
+    return extract_gemini_text(response), usage_fields(response, "gemini")
 
 def call_openrouter(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     text, response = chat_completion(
@@ -414,6 +459,10 @@ def call_agent_messages(
             temperature=temperature,
         )
         usage = usage_fields(response, provider)
+    elif provider == "gemini":
+        response = _gemini_generate(config, messages, max_tokens, temperature)
+        text = extract_gemini_text(response)
+        usage = usage_fields(response, provider)
     elif provider == "anthropic":
         system_text = "\n\n".join(
             message["content"] for message in messages
@@ -462,6 +511,8 @@ def call_provider(
         return call_custom(config, question, instructions, max_tokens, temperature)
     if provider == "anthropic":
         return call_anthropic(config, question, instructions, max_tokens, temperature)
+    if provider == "gemini":
+        return call_gemini(config, question, instructions, max_tokens, temperature)
     if provider == "ollama":
         # Ollama has no non-streaming path left: aggregate the stream silently.
         return call_ollama_stream(config, question, instructions, max_tokens, temperature,

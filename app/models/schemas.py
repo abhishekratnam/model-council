@@ -13,3 +13,7 @@ class ExoModelsPayload(BaseModel):
 
 class OpenRouterModelsPayload(BaseModel):
     api_key: str
+
+
+class GeminiModelsPayload(BaseModel):
+    api_key: str
