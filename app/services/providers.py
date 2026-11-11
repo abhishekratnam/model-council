@@ -248,6 +248,7 @@ def ollama_relay_messages(
     *,
     keep_alive: str = "5m",
     format_json: bool = False,
+    format_schema: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int]]:
     request_id = uuid.uuid4().hex
     rpc = {
@@ -258,7 +259,9 @@ def ollama_relay_messages(
         "options": options,
         "keep_alive": keep_alive,
     }
-    if format_json:
+    if format_schema is not None:
+        rpc["format"] = format_schema
+    elif format_json:
         rpc["format"] = "json"
     emit(rpc)
     
@@ -370,12 +373,14 @@ def call_ollama_messages(
     *,
     num_ctx: int,
     format_json: bool = True,
+    format_schema: dict[str, Any] | None = None,
     emit: Any = None,
     browser_rpc_queue: queue.Queue | None = None,
     delta_event_type: str = "agent_delta",
 ) -> tuple[str, dict[str, int]]:
-    """Multi-turn agent call. JSON output mode + an explicit context window —
-    Ollama's default num_ctx silently truncates file contents otherwise."""
+    """Multi-turn agent call. Structured JSON output (schema when given, else
+    generic JSON mode) + an explicit context window — Ollama's default num_ctx
+    silently truncates file contents otherwise."""
     base_url = clean_ollama_base_url(config.get("base_url"))
     payload: dict[str, Any] = {
         "model": provider_model(config),
@@ -385,7 +390,9 @@ def call_ollama_messages(
         "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": num_ctx},
         "keep_alive": "15m",
     }
-    if format_json:
+    if format_schema is not None:
+        payload["format"] = format_schema
+    elif format_json:
         payload["format"] = "json"
     if emit is not None and browser_rpc_queue is not None:
         hostname = urllib.parse.urlsplit(base_url).hostname
@@ -399,6 +406,7 @@ def call_ollama_messages(
                 delta_event_type,
                 keep_alive=payload["keep_alive"],
                 format_json=format_json,
+                format_schema=format_schema,
             )
     return _stream_ollama_chat(base_url, payload, on_delta)
 

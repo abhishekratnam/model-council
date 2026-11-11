@@ -243,6 +243,12 @@ from the members panel (Ollama, OpenAI, OpenRouter, Claude, Gemini, or Azure / c
 plans and drives the run while the agent explores a sandboxed codebase, stages changes, and asks
 for approval before applying file edits or running commands.
 
+When the agent model is a local Ollama model, each reply is constrained with a structured JSON
+schema for the current stage (plan or action), so the model cannot wrap actions in prose.
+Older Ollama versions that only support `format: "json"` are detected and fall back automatically.
+Model replies from any provider are also parsed defensively: code fences, trailing commas, and
+smart quotes are repaired before a turn is counted as unparseable.
+
 1. Open the **Workspace · code agent** tab next to *Council debate*. For a hosted app, start the local companion and pair it using the one-time terminal code, then click **Select folder**. Local deployments can instead choose a configured server workspace.
 2. Enable and configure one provider in the members panel, then select its model under **Agent model**. Only that one model handles the run.
 3. Browse the sandboxed file tree or search the code; click any file to read it with line numbers.

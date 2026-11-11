@@ -442,7 +442,12 @@
       });
 
       if (!response.ok) {
-        socket.send(JSON.stringify({ rpc: "ollama_error", request_id: message.request_id, error: `Ollama HTTP ${response.status}` }));
+        let detail = "";
+        try {
+          const body = await response.text();
+          if (body) detail = `: ${body.slice(0, 200)}`;
+        } catch (_) { /* keep the status-only message */ }
+        socket.send(JSON.stringify({ rpc: "ollama_error", request_id: message.request_id, error: `Ollama HTTP ${response.status}${detail}` }));
         return;
       }
 

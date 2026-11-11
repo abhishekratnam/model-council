@@ -43,6 +43,45 @@ from app.session import consume_approved_plan, load_pending_plan, save_paused_pl
 
 VALID_ACTIONS = {"list_tree", "search", "read_file", "write_file", "edit_file", "run_command", "done", "fail"}
 
+# Ollama structured outputs (0.5+): constrain every agent reply to the exact
+# action shape so small local models cannot wrap JSON in prose or invent fields.
+# Other providers stay unconstrained and rely on _parse_action + repair.
+ACTION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": sorted(VALID_ACTIONS)},
+        "path": {"type": "string"},
+        "query": {"type": "string"},
+        "is_regex": {"type": "boolean"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"},
+        "content": {"type": "string"},
+        "find": {"type": "string"},
+        "replace": {"type": "string"},
+        "command": {"type": "string"},
+        "probe_url": {"type": "string"},
+        "summary": {"type": "string"},
+    },
+    "required": ["action"],
+}
+
+PLAN_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "plan": {
+            "type": "object",
+            "properties": {
+                "steps": {"type": "array", "items": {"type": "string"}},
+                "files": {"type": "array", "items": {"type": "string"}},
+                "commands": {"type": "array", "items": {"type": "string"}},
+                "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+            },
+            "required": ["steps"],
+        }
+    },
+    "required": ["plan"],
+}
+
 # _execute_action sentinels: the run must stop, not feed the text to the model.
 CANCELLED, TIMED_OUT = "__cancelled__", "__confirm_timeout__"
 PLAN_MAX_CHARS = 6_000
@@ -59,14 +98,27 @@ def _call_agent_model(
     emit: Any,
     browser_rpc_queue: queue.Queue,
     delta_event_type: str,
+    format_schema: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int]]:
     if provider == "ollama":
-        return call_ollama_messages(
-            config, messages, max_tokens, temperature, on_delta,
-            num_ctx=CODE_AGENT_NUM_CTX, emit=emit,
-            browser_rpc_queue=browser_rpc_queue,
-            delta_event_type=delta_event_type,
-        )
+        try:
+            return call_ollama_messages(
+                config, messages, max_tokens, temperature, on_delta,
+                num_ctx=CODE_AGENT_NUM_CTX, emit=emit,
+                browser_rpc_queue=browser_rpc_queue,
+                delta_event_type=delta_event_type,
+                format_schema=format_schema,
+            )
+        except ProviderError as error:
+            # Older Ollama builds only accept format:"json"; retry that once.
+            if format_schema is not None and _looks_like_format_rejection(error):
+                return call_ollama_messages(
+                    config, messages, max_tokens, temperature, on_delta,
+                    num_ctx=CODE_AGENT_NUM_CTX, emit=emit,
+                    browser_rpc_queue=browser_rpc_queue,
+                    delta_event_type=delta_event_type,
+                )
+            raise
     return call_agent_messages(
         provider, config, messages, max_tokens, temperature, on_delta,
         num_ctx=CODE_AGENT_NUM_CTX, emit=emit,
@@ -75,19 +127,60 @@ def _call_agent_model(
     )
 
 
+def _looks_like_format_rejection(error: ProviderError) -> bool:
+    detail = str(error).casefold()
+    return "format" in detail and any(
+        marker in detail for marker in ("schema", "json", "unmarshal", "unsupported", "invalid")
+    )
+
+
 class _StopAfterPlan(Exception):
     """Exit the action loop after a plan was rejected or could not be approved."""
 
 
+def _decode_json_objects(text: str) -> list[dict[str, Any]]:
+    """Every top-level JSON object in the text, in order. raw_decode stops at
+    each object's real end, so prose around JSON and multiple objects are fine."""
+    decoder = json.JSONDecoder()
+    found: list[dict[str, Any]] = []
+    start = 0
+    for _ in range(64):  # Bound the scan on pathological output.
+        index = text.find("{", start)
+        if index == -1:
+            break
+        try:
+            value, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            start = index + 1
+            continue
+        start = index + end
+        if isinstance(value, dict):
+            found.append(value)
+    return found
+
+def _repair_json_text(text: str) -> str:
+    """Best-effort fixes for small-model JSON: code fences, smart quotes,
+    trailing commas. Only used when strict parsing failed."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z0-9]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = (cleaned
+               .replace("“", '"').replace("”", '"')
+               .replace("‘", "'").replace("’", "'"))
+    cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+    return cleaned
+
 def _parse_action(text: str) -> dict[str, Any] | None:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
+    if not isinstance(text, str):
         return None
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    for candidate in _decode_json_objects(text):
+        return candidate
+    cleaned = _repair_json_text(text)
+    if cleaned != text.strip():
+        for candidate in _decode_json_objects(cleaned):
+            return candidate
+    return None
 
 
 def _parse_plan(text: str) -> str:
@@ -644,6 +737,7 @@ def run_code_agent(payload: dict[str, Any], emit: Any, browser_rpc_queue: queue.
                     emit=emit,
                     browser_rpc_queue=browser_rpc_queue,
                     delta_event_type="agent_plan_delta",
+                    format_schema=PLAN_JSON_SCHEMA,
                 )
                 _log_usage(plan_usage, round((time.perf_counter() - plan_started) * 1_000))
                 plan = _parse_plan(raw_plan)
@@ -741,6 +835,7 @@ def run_code_agent(payload: dict[str, Any], emit: Any, browser_rpc_queue: queue.
                 emit=emit,
                 browser_rpc_queue=browser_rpc_queue,
                 delta_event_type="agent_delta",
+                format_schema=ACTION_JSON_SCHEMA,
             )
             _log_usage(usage, round((time.perf_counter() - call_started) * 1_000))
 
