@@ -55,6 +55,12 @@
     exoStatus: $("#exo-status"),
     exoModel: $("#exo-model"),
     exoBaseUrl: $("#exo-base-url"),
+    opencodeKey: $("#opencode-key"),
+    opencodeModel: $("#opencode-model"),
+    opencodeModelSearch: $("#opencode-model-search"),
+    opencodeProtocol: $("#opencode-protocol"),
+    opencodeRefresh: $("#refresh-opencode"),
+    opencodeStatus: $("#opencode-status"),
     customMode: $("#custom-mode"),
     customStatus: $("#custom-status"),
     customJson: $("#custom-json"),
@@ -74,6 +80,7 @@
       gemini: $("#gemini-enabled"),
       ollama: $("#ollama-enabled"),
       exo: $("#exo-enabled"),
+      opencode: $("#opencode-enabled"),
     },
     // Memory elements
     memoryEnabled: $("#memory-enabled"),
@@ -132,8 +139,8 @@
     agentSummaryMeta: $("#agent-summary-meta"),
   };
 
-  const providers = ["openai", "openrouter", "custom", "anthropic", "gemini", "ollama", "exo"];
-  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", gemini: "Gemini", ollama: "Ollama", exo: "exo" };
+  const providers = ["openai", "openrouter", "custom", "anthropic", "gemini", "ollama", "exo", "opencode"];
+  const providerLabels = { openai: "OpenAI", openrouter: "OpenRouter", custom: "Azure / custom", anthropic: "Claude", gemini: "Gemini", ollama: "Ollama", exo: "exo", opencode: "OpenCode" };
 
   // Streaming deltas re-render the whole accumulated answer (O(text length)
   // each time), so coalesce them to at most one markdown render per interval.
@@ -143,6 +150,7 @@
   const state = {
     members: [],
     openrouterModels: [],
+    opencodeModels: [],
     question: "",
     finalAnswer: "",
     toastTimer: null,
@@ -616,6 +624,12 @@
         base_url: elements.ollamaBaseUrl.value.trim(),
       },
       exo: { enabled: isEnabled("exo"), model: elements.exoModel.value.trim(), base_url: elements.exoBaseUrl.value.trim() },
+      opencode: {
+        enabled: isEnabled("opencode"),
+        model: elements.opencodeModel.value.trim(),
+        api_key: isEnabled("opencode") ? elements.opencodeKey.value : "",
+        protocol: elements.opencodeProtocol.value,
+      },
       custom: {
         enabled: customEnabled,
         mode: customMode,
@@ -717,7 +731,7 @@
     const eligible = providers.filter((provider) => {
       const config = settings[provider];
       if (!config.enabled || !config.model) return false;
-      if (["openai", "openrouter", "anthropic", "gemini"].includes(provider)) return Boolean(config.api_key.trim());
+      if (["openai", "openrouter", "anthropic", "gemini", "opencode"].includes(provider)) return Boolean(config.api_key.trim());
       if (provider === "custom") {
         return Boolean(config.endpoint.trim()) && (config.auth_type === "none" || Boolean(config.api_key.trim()));
       }
@@ -1317,6 +1331,65 @@
     } finally {
       elements.openrouterRefresh.disabled = !isEnabled("openrouter");
       elements.openrouterRefresh.textContent = "Refresh";
+    }
+  }
+
+  function renderOpencodeModelOptions() {
+    const selectedModel = elements.opencodeModel.value;
+    const query = elements.opencodeModelSearch.value.trim().toLowerCase();
+    const matches = state.opencodeModels.filter((model) =>
+      !query || `${model.id} ${model.name}`.toLowerCase().includes(query)
+    );
+    if (selectedModel && !matches.some((model) => model.id === selectedModel)) {
+      const selected = state.opencodeModels.find((model) => model.id === selectedModel);
+      if (selected) matches.unshift(selected);
+    }
+
+    const options = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = state.opencodeModels.length
+      ? (matches.length ? "Choose an OpenCode model" : "No matching models")
+      : "Refresh to load OpenCode models";
+    options.append(placeholder);
+    for (const model of matches.slice(0, 250)) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = `${model.name} · ${model.id}`;
+      options.append(option);
+    }
+    elements.opencodeModel.replaceChildren(options);
+    elements.opencodeModel.value = selectedModel;
+  }
+
+  async function refreshOpencodeModels() {
+    if (elements.opencodeRefresh.disabled) return;
+    const api_key = elements.opencodeKey.value.trim();
+    if (!api_key) {
+      elements.opencodeStatus.textContent = "Enter your OpenCode API key first.";
+      elements.opencodeStatus.className = "connection-note is-error";
+      return;
+    }
+
+    elements.opencodeRefresh.disabled = true;
+    elements.opencodeRefresh.textContent = "Loading…";
+    elements.opencodeStatus.textContent = "Loading the models your key can access…";
+    elements.opencodeStatus.className = "connection-note";
+    try {
+      const data = await request("/api/opencode/models", { api_key });
+      state.opencodeModels = Array.isArray(data.models) ? data.models : [];
+      renderOpencodeModelOptions();
+      updateAgentProviderOptions();
+      elements.opencodeStatus.textContent = state.opencodeModels.length
+        ? `${state.opencodeModels.length.toLocaleString()} models available. Search by name or model ID.`
+        : "OpenCode returned no models for this key.";
+      elements.opencodeStatus.className = "connection-note is-ready";
+    } catch (error) {
+      elements.opencodeStatus.textContent = error.message || "Could not load OpenCode models.";
+      elements.opencodeStatus.className = "connection-note is-error";
+    } finally {
+      elements.opencodeRefresh.disabled = !isEnabled("opencode");
+      elements.opencodeRefresh.textContent = "Refresh";
     }
   }
 
@@ -2348,6 +2421,8 @@
     });
     elements.openrouterRefresh.addEventListener("click", refreshOpenRouterModels);
     elements.openrouterModelSearch.addEventListener("input", renderOpenRouterModelOptions);
+    elements.opencodeRefresh.addEventListener("click", refreshOpencodeModels);
+    elements.opencodeModelSearch.addEventListener("input", renderOpencodeModelOptions);
     elements.customMode.addEventListener("change", syncCustomMode);
     elements.applyCustomJson.addEventListener("click", applyCustomJson);
 

@@ -25,6 +25,27 @@ def extract_openai_text(response: dict[str, Any]) -> str:
         return "\n".join(chunks)
     raise ProviderError("OpenAI returned no text output.")
 
+def extract_openai_chat_text(response: dict[str, Any]) -> str:
+    """Text from an OpenAI-style chat completion response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ProviderError("The provider returned no choices.")
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise ProviderError("The provider returned an unexpected message.")
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        chunks = [
+            block.get("text", "").strip()
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str) and block["text"].strip()
+        ]
+        if chunks:
+            return "\n".join(chunks)
+    raise ProviderError("The provider returned no text output.")
+
 def extract_gemini_text(response: dict[str, Any]) -> str:
     chunks: list[str] = []
     candidates = response.get("candidates")
@@ -69,7 +90,7 @@ def usage_fields(response: dict[str, Any], provider: str) -> dict[str, int]:
                    "totalTokenCount": "total_tokens"}
         return {target: metadata[source] for source, target in mapping.items()
                 if isinstance(metadata.get(source), int)}
-    if provider in {"openai", "openrouter", "anthropic", "custom", "exo"}:
+    if provider in {"openai", "openrouter", "anthropic", "custom", "exo", "opencode"}:
         usage = response.get("usage")
         if isinstance(usage, dict):
             return {key: value for key, value in usage.items() if isinstance(value, int)}

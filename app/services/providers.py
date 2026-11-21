@@ -8,10 +8,10 @@ import urllib.error
 import urllib.request
 import uuid
 from typing import Any
-from app.core.config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS
+from app.core.config import DEFAULT_OLLAMA_BASE_URL, DEFAULT_OPENCODE_BASE_URL, OLLAMA_STREAM_IDLE_TIMEOUT_SECONDS
 from app.core.exceptions import CouncilError, ProviderError
 from app.services.http_client import request_json, error_detail
-from app.services.extractors import extract_openai_text, extract_anthropic_text, extract_gemini_text, usage_fields
+from app.services.extractors import extract_openai_text, extract_openai_chat_text, extract_anthropic_text, extract_gemini_text, usage_fields
 from app.services.security import clean_ollama_base_url, clean_exo_base_url, is_loopback_host, provider_model, custom_string_map, custom_response_url, scrub_secrets
 from app.llm.openrouter_client import chat_completion
 
@@ -101,6 +101,89 @@ def call_exo_messages(config: dict[str, Any], messages: list[dict[str, str]], ma
     if emit is not None and browser_rpc_queue is not None and is_loopback_host(urllib.parse.urlsplit(base_url).hostname):
         return exo_relay_messages(config, messages, max_tokens, temperature, emit, browser_rpc_queue, delta_event_type)
     return _stream_exo_chat(config, messages, max_tokens, temperature, on_delta)
+
+def _opencode_headers(config: dict[str, Any]) -> dict[str, str]:
+    api_key = str(config.get("api_key", "")).strip()
+    if not api_key:
+        raise ProviderError("No OpenCode API key supplied.")
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _opencode_base_url(config: dict[str, Any]) -> str:
+    base = str(config.get("base_url") or DEFAULT_OPENCODE_BASE_URL).strip()
+    return base.rstrip("/")
+
+
+def call_opencode(config: dict[str, Any], question: str, instructions: str,
+                  max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
+    """One OpenCode inference call. Models on the OpenCode gateway speak either
+    the OpenAI Responses API or Chat Completions; `protocol` selects the family
+    ("auto" tries Responses first and falls back to Chat Completions)."""
+    headers = _opencode_headers(config)
+    protocol = str(config.get("protocol") or "auto").strip().lower()
+    if protocol not in {"responses", "chat-completions", "auto"}:
+        protocol = "auto"
+    attempts = (("responses", "chat-completions") if protocol == "auto"
+                else (protocol,))
+    last_error: Exception | None = None
+    for family in attempts:
+        if family == "responses":
+            url = f"{_opencode_base_url(config)}/responses"
+            payload: dict[str, Any] = {
+                "model": provider_model(config),
+                "instructions": instructions,
+                "input": [{"role": "user", "content": question}],
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+                "store": False,
+            }
+            extract = extract_openai_text
+        else:
+            url = f"{_opencode_base_url(config)}/chat/completions"
+            payload = {
+                "model": provider_model(config),
+                "messages": [{"role": "system", "content": instructions},
+                             {"role": "user", "content": question}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            extract = extract_openai_chat_text
+        try:
+            response = request_json("POST", url, headers=headers, payload=payload)
+        except ProviderError as error:
+            last_error = error
+            continue
+        return extract(response), usage_fields(response, "opencode")
+    raise last_error or ProviderError("OpenCode returned no usable response.")
+
+
+def _opencode_messages_call(config: dict[str, Any], messages: list[dict[str, str]],
+                            max_tokens: int, temperature: float,
+                            family: str) -> tuple[str, dict[str, int]]:
+    headers = _opencode_headers(config)
+    if family == "chat-completions":
+        response = request_json(
+            "POST", f"{_opencode_base_url(config)}/chat/completions", headers=headers,
+            payload={"model": provider_model(config), "messages": messages,
+                     "max_tokens": max_tokens, "temperature": temperature},
+        )
+        return extract_openai_chat_text(response), usage_fields(response, "opencode")
+    system_text = "\n\n".join(
+        message["content"] for message in messages
+        if message.get("role") in {"system", "developer"}
+    )
+    conversation = [
+        {"role": message["role"], "content": message["content"]}
+        for message in messages if message.get("role") in {"user", "assistant"}
+    ]
+    response = request_json(
+        "POST", f"{_opencode_base_url(config)}/responses", headers=headers,
+        payload={"model": provider_model(config), "instructions": system_text,
+                 "input": conversation, "max_output_tokens": max_tokens,
+                 "temperature": temperature, "store": False},
+    )
+    return extract_openai_text(response), usage_fields(response, "opencode")
+
 
 def call_openai(config: dict[str, Any], question: str, instructions: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, int]]:
     model = provider_model(config)
@@ -434,6 +517,20 @@ def call_agent_messages(
         return call_exo_messages(config, messages, max_tokens, temperature, on_delta,
             emit=emit, browser_rpc_queue=browser_rpc_queue, delta_event_type=delta_event_type)
 
+    if provider == "opencode":
+        protocol = str(config.get("protocol") or "auto").strip().lower()
+        families = (("responses", "chat-completions") if protocol == "auto"
+                    else (protocol if protocol in {"responses", "chat-completions"} else "responses",))
+        last_error: Exception | None = None
+        for family in families:
+            try:
+                text, usage = _opencode_messages_call(config, messages, max_tokens, temperature, family)
+                break
+            except ProviderError as error:
+                last_error = error
+        else:
+            raise last_error or ProviderError("OpenCode returned no usable response.")
+
     if provider in {"openai", "custom"}:
         if provider == "openai":
             url = "https://api.openai.com/v1/responses"
@@ -513,6 +610,8 @@ def call_provider(
 ) -> tuple[str, dict[str, int]]:
     if provider == "openai":
         return call_openai(config, question, instructions, max_tokens, temperature)
+    if provider == "opencode":
+        return call_opencode(config, question, instructions, max_tokens, temperature)
     if provider == "openrouter":
         return call_openrouter(config, question, instructions, max_tokens, temperature)
     if provider == "custom":

@@ -227,8 +227,9 @@ Typical providers include:
 - Ollama
 - Azure OpenAI
 - OpenAI-compatible Responses API deployments
+- OpenCode inference gateway (`https://opencode.ai/inference`), with a model list loaded from your key
 
-For Azure or a compatible Responses API endpoint, configure the provider through the UI rather than storing credentials in the repository.
+For Azure, a compatible Responses API endpoint, or the OpenCode gateway, configure the provider through the UI rather than storing credentials in the repository.
 
 ## 8. How a round works
 
