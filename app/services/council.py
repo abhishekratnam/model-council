@@ -15,6 +15,7 @@ from app.core.memory import generate_round_id
 from app.services.validation import trim_text, bounded_int, bounded_float, truncate, validate_session_id
 from app.services.security import provider_config, provider_label, provider_model, provider_ready, is_loopback_host, clean_ollama_base_url, scrub_secrets
 from app.services.providers import call_provider, call_ollama_stream, ollama_relay_call, call_exo_messages
+from app.services.compaction import compact_session_memory
 import json
 import re
 def _call_member(provider, config, prompt, instructions, max_tokens, temperature,
@@ -303,6 +304,8 @@ def run_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_queue: qu
                 "conflicts": disagreement["conflicts"],
                 "remaining_disagreements": synthesis.get("remaining_disagreements", []),
             })
+        if memory_enabled and not cancelled:
+            compact_session_memory(payload, session_id, emit=emit, browser_rpc_queue=browser_rpc_queue)
 
         return {
             "question": question, "round_id": round_id,
@@ -401,6 +404,8 @@ def synthesize_council_stream(payload: dict[str, Any], emit: Any, browser_rpc_qu
             "model": provider_model(config),
             "answer": answer,
         })
+    if memory_enabled:
+        compact_session_memory(payload, session_id, emit=emit, browser_rpc_queue=browser_rpc_queue)
 
     return {
         "moderator": moderator,
@@ -421,5 +426,6 @@ def memory_history_response(session_id: str) -> dict[str, Any]:
         "available": memory_store.available,
         "round_count": len(rounds),
         "rounds": rounds,
+        "summary": memory_store.load_summary(session_id),
         "stats": stats,
     }

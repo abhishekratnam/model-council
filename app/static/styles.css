@@ -1414,6 +1414,21 @@ input[type="range"] {
   font-weight: 700;
 }
 
+.memory-summary {
+  border-color: rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.memory-summary summary {
+  color: var(--violet);
+  font-weight: 700;
+}
+
+.memory-summary .memory-question {
+  white-space: pre-wrap;
+  color: #b7b4c4;
+}
+
 .muted {
   color: var(--dim);
   font-style: italic;

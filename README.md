@@ -127,6 +127,10 @@ For example, the application can also use:
 ```env
 MODEL_COUNCIL_MEMORY_TTL=86400
 MODEL_COUNCIL_MEMORY_MAX_ROUNDS=8
+MODEL_COUNCIL_COMPACTION_ENABLED=1
+MODEL_COUNCIL_COMPACTION_THRESHOLD_CHARS=12000
+MODEL_COUNCIL_COMPACTION_KEEP_ROUNDS=2
+MODEL_COUNCIL_COMPACTION_MAX_SUMMARY_CHARS=4000
 MODEL_COUNCIL_ALLOW_REMOTE_OLLAMA=1
 MODEL_COUNCIL_WORKSPACE_ROOT=/absolute/path/to/any/codebase,/absolute/path/to/another/repo
 ```
@@ -235,6 +239,26 @@ For Azure or a compatible Responses API endpoint, configure the provider through
 5. The selected chair receives the original question plus the selected council submissions and produces the final synthesis.
 
 Ollama responses and Ollama-led synthesis stream through the application's WebSocket connection.
+
+### Conversation memory compaction
+
+When **Remember conversation** is on, long chats are compacted automatically with your configured
+local Ollama model — no cloud call and no extra setup. After a round, once the stored context grows
+past `MODEL_COUNCIL_COMPACTION_THRESHOLD_CHARS` (or the session comes within one round of the
+`MODEL_COUNCIL_MEMORY_MAX_ROUNDS` trim), the older rounds are merged into a rolling summary:
+
+- The newest `MODEL_COUNCIL_COMPACTION_KEEP_ROUNDS` uncovered rounds always stay verbatim in context.
+- The summary is stored in Redis beside the session (`...:summary`) with the same TTL, and records
+  which rounds it covers. Covered rounds are skipped when building context, so the summary survives
+  even after the raw rounds are trimmed away.
+- When you return to the session, the next question receives *summary + recent rounds* instead of
+  clipped 500-character fragments, and the memory panel shows the compacted summary card.
+- Compaction is best-effort: if Ollama is not configured, is disabled, or fails, the round completes
+  normally and the existing truncated-context behavior is kept. Set
+  `MODEL_COUNCIL_COMPACTION_ENABLED=0` to turn it off.
+
+Local Ollama compaction uses the same browser relay as council rounds, so it also works when the app
+runs in Docker or on a hosted server.
 
 ## 9. Workspace mode (single-provider code agent)
 

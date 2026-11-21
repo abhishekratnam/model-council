@@ -1,0 +1,33 @@
+Long AI conversations have a quiet failure mode: the model slowly forgets what you told it.
+
+This week I fixed that in Model Council, my local-first app that asks multiple AI models the same question and lets a "chair" synthesize the best answer.
+
+The problem: conversation memory was clipping every answer to 500 characters and dropping anything older than 8 rounds. Resume a long session, and the model got fragments — not context.
+
+The fix: automatic compaction. When a chat grows too long, a local LLM merges the older rounds into a rolling summary — decisions, facts, preferences, open questions. The newest rounds stay verbatim. The summary survives even after the raw history is trimmed.
+
+The best part: it runs entirely on Ollama, on your own machine. No cloud call, no API cost, no data leaving your laptop.
+
+One rule I held onto: compaction is best-effort. If the local model fails, the conversation continues normally. Memory should degrade gracefully — never take the app down with it.
+
+Small feature, big difference in how "heard" the model feels.
+
+#BuildInPublic #LocalLLM #Ollama #AIEngineering #Python
+
+Shorter, punchier variant if you prefer less detail:
+
+Your AI app doesn't have a context problem. It has a memory problem.
+
+This week I shipped compaction for Model Council: when a chat gets too long, a local LLM distills the older rounds into a rolling summary — so resuming a session feels like continuing a conversation, not re-introducing yourself.
+
+Runs 100% locally via Ollama. Zero cloud calls. Zero cost. And if it fails, the app doesn't even notice.
+
+The best infrastructure is the kind that quietly makes everything else feel smarter.
+
+#LocalLLM #BuildInPublic #AIEngineering
+
+A few tips before posting:
+
+Add a visual — a screenshot of the violet "Compacted memory" card in the memory panel, or a before/after of the context the model receives, will significantly boost reach.
+First line is the hook — LinkedIn truncates after ~2 lines, so both drafts front-load the interesting claim.
+If you want engagement, end with a question instead of the last statement, e.g. "How are you handling long-context memory in your AI apps?"

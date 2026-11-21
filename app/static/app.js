@@ -214,20 +214,21 @@
       const resp = await fetch(`/api/memory/${state.sessionId}`);
       if (!resp.ok) return;
       const data = await resp.json();
-      renderMemoryHistory(data.rounds || []);
-      updateMemoryBadge(data.available, data.round_count);
+      renderMemoryHistory(data.rounds || [], data.summary);
+      updateMemoryBadge(data.available, data.round_count, Boolean(data.summary && data.summary.summary));
     } catch (e) {
       console.warn("Memory history unavailable:", e);
     }
   }
 
-  function updateMemoryBadge(available, count) {
+  function updateMemoryBadge(available, count, compacted = false) {
     if (!elements.memoryBadge) return;
     if (!available) {
       elements.memoryBadge.textContent = "Memory: off (Redis unavailable)";
       elements.memoryBadge.style.color = "#f87171";
-    } else if (count > 0) {
-      elements.memoryBadge.textContent = `Memory: ${count} round${count > 1 ? "s" : ""}`;
+    } else if (count > 0 || compacted) {
+      const suffix = compacted ? " · compacted" : "";
+      elements.memoryBadge.textContent = `Memory: ${count} round${count === 1 ? "" : "s"}${suffix}`;
       elements.memoryBadge.style.color = "#10b981";
     } else {
       elements.memoryBadge.textContent = "Memory: empty";
@@ -244,13 +245,21 @@
       .replaceAll("'", "&#39;");
   }
 
-  function renderMemoryHistory(rounds) {
+  function renderMemoryHistory(rounds, summary) {
     if (!elements.memoryHistory) return;
-    if (!rounds.length) {
+    const summaryCard = summary && summary.summary
+      ? `<details class="memory-round memory-summary" open>
+          <summary>Compacted memory — ${escapeHtml(summary.model || "local model")}${summary.created_at ? ` · ${new Date(summary.created_at * 1000).toLocaleString()}` : ""}</summary>
+          <div class="memory-round-body">
+            <div class="memory-question">${escapeHtml(summary.summary)}</div>
+          </div>
+        </details>`
+      : "";
+    if (!rounds.length && !summaryCard) {
       elements.memoryHistory.innerHTML = '<p class="muted">No prior conversation.</p>';
       return;
     }
-    elements.memoryHistory.innerHTML = rounds
+    elements.memoryHistory.innerHTML = summaryCard + rounds
       .map((r) => {
         const synth = r.synthesis
           ? `<div class="memory-synthesis"><strong>${escapeHtml(r.synthesis.label)}</strong>: ${escapeHtml(r.synthesis.answer.slice(0, 150))}${r.synthesis.answer.length > 150 ? "…" : ""}</div>`
@@ -1149,6 +1158,10 @@
           if (!member || typeof event.delta !== "string") return;
           member.text = `${member.text || ""}${event.delta}`;
           scheduleMemberPatch(member.provider);
+        } else if (event.type === "compaction_start") {
+          elements.roundTime.textContent = "Compacting conversation memory with the local model…";
+        } else if (event.type === "compaction_complete") {
+          showToast("Conversation memory compacted — earlier rounds are now a summary.");
         }
       });
 
@@ -1230,6 +1243,8 @@
         } else if (event.type === "synthesis_delta" && typeof event.delta === "string") {
           state.finalAnswer += event.delta;
           scheduleFinalRender();
+        } else if (event.type === "compaction_complete") {
+          showToast("Conversation memory compacted — earlier rounds are now a summary.");
         }
       });
       state.finalAnswer = data.answer || "";
