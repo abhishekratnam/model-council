@@ -3,11 +3,10 @@ import asyncio
 from fastapi import APIRouter
 
 from app.core.run_registry import cancel_run
-from app.models.schemas import OllamaModelsPayload, OpenRouterModelsPayload, ExoModelsPayload, GeminiModelsPayload, OpenCodeModelsPayload
+from app.models.schemas import OllamaModelsPayload, OpenRouterModelsPayload, ExoModelsPayload, GeminiModelsPayload
 from app.services.council import memory_history_response
 from app.services.ollama import ollama_models
 from app.services.openrouter import openrouter_models
-from app.services.opencode import opencode_models
 from app.services.exo import exo_models
 from app.services.gemini import gemini_models
 from app.services.validation import validate_session_id
@@ -85,11 +84,6 @@ async def exo_models_endpoint(payload: ExoModelsPayload):
 async def openrouter_models_endpoint(payload: OpenRouterModelsPayload):
     body = payload.model_dump()
     return await asyncio.to_thread(openrouter_models, body)
-
-
-@router.post("/opencode/models")
-async def opencode_models_endpoint(payload: OpenCodeModelsPayload):
-    return await asyncio.to_thread(opencode_models, payload.model_dump())
 
 
 @router.post("/gemini/models")

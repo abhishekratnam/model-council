@@ -9,7 +9,6 @@ from app.services.validation import trim_text
 
 def scrub_secrets(value: str) -> str:
     patterns = (
-        r"oc_sk-[A-Za-z0-9_\-]{8,}",
         r"sk-ant-[A-Za-z0-9_\-]{8,}",
         r"sk-[A-Za-z0-9_\-]{8,}",
         r"AIza[0-9A-Za-z_\-]{10,}",
@@ -190,7 +189,7 @@ def provider_ready(provider: str, config: dict[str, Any], *, require_enabled: bo
         return "Disabled"
     if not provider_model(config):
         return "Choose a model"
-    if provider in {"openai", "openrouter", "anthropic", "gemini", "opencode"}:
+    if provider in {"openai", "openrouter", "anthropic", "gemini"}:
         key = config.get("api_key", "")
         if provider == "openrouter" and not (isinstance(key, str) and key.strip()):
             key = os.getenv("OPENROUTER_API_KEY", "")

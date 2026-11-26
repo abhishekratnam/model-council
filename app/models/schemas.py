@@ -15,9 +15,5 @@ class OpenRouterModelsPayload(BaseModel):
     api_key: str
 
 
-class OpenCodeModelsPayload(BaseModel):
-    api_key: str
-
-
 class GeminiModelsPayload(BaseModel):
     api_key: str

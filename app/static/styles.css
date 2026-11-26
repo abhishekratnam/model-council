@@ -432,7 +432,6 @@ h1 span {
 .provider-claude { box-shadow: inset 2px 0 0 rgba(233, 120, 74, 0.7); }
 .provider-gemini { box-shadow: inset 2px 0 0 rgba(66, 133, 244, 0.75); }
 .provider-ollama { box-shadow: inset 2px 0 0 rgba(157, 137, 255, 0.75); }
-.provider-opencode { box-shadow: inset 2px 0 0 rgba(45, 212, 191, 0.75); }
 
 .provider-head {
   display: flex;
@@ -467,7 +466,6 @@ h1 span {
 .claude-glyph { background: var(--orange-soft); color: #f2b198; }
 .gemini-glyph { background: rgba(66, 133, 244, 0.16); color: #a8c7fa; }
 .ollama-glyph { background: var(--violet-soft); color: #cdc3ff; }
-.opencode-glyph { background: rgba(45, 212, 191, 0.14); color: #99f6e4; }
 
 .provider-title h3 {
   margin: 0;

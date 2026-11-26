@@ -50,7 +50,6 @@ logger = logging.getLogger("model_council")
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_EXO_BASE_URL = "http://127.0.0.1:52415"
-DEFAULT_OPENCODE_BASE_URL = "https://opencode.ai/inference/openai/v1"
 MAX_PROMPT_CHARS = 14_000
 MAX_SYSTEM_PROMPT_CHARS = 4_000
 MAX_PROVIDER_OUTPUT_CHARS = 40_000
@@ -150,7 +149,6 @@ PROVIDER_LABELS = {
     "ollama": "Ollama",
     "exo": "exo",
     "custom": "Azure / custom",
-    "opencode": "OpenCode",
 }
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -213,5 +211,4 @@ PRICING_PER_1K_TOKENS = {
     "ollama": 0.0,        # Local models are free
     "exo": 0.0,           # Local models are free
     "custom": 0.005,      # Default for Azure/custom endpoints
-    "opencode": 0.005,    # Blended estimate; OpenCode reports per-model cost in usage
 }
